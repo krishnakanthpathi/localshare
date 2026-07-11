@@ -30,6 +30,15 @@ websocketService.registerHandler('REJECT_TRANSFER', (ws, data) => {
   }
 });
 
+websocketService.registerHandler('CANCEL_TRANSFER', (ws, data) => {
+  try {
+    const { transferId } = data;
+    tcpTransferService.cancelTransfer(transferId);
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'ERROR', data: { message: err.message } }));
+  }
+});
+
 // Setup fallback server port listener
 const port = config.port;
 

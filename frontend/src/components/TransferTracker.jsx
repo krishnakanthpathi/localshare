@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDownCircle, ArrowUpCircle, CheckCircle, AlertCircle, Loader } from 'lucide-react';
+import { ArrowDownCircle, ArrowUpCircle, CheckCircle, AlertCircle, Loader, X, XCircle } from 'lucide-react';
 
 const formatBytes = (bytes) => {
   if (bytes === 0) return '0 Bytes';
@@ -9,7 +9,7 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
-export default function TransferTracker({ transfers }) {
+export default function TransferTracker({ transfers, onCancel }) {
   const activeList = Object.values(transfers);
   if (activeList.length === 0) return null;
 
@@ -31,15 +31,29 @@ export default function TransferTracker({ transfers }) {
           
           const isInbound = direction === 'INBOUND';
           const isCompleted = status === 'COMPLETED';
+          const isCancelled = status === 'CANCELLED';
           const isFailed = status === 'FAILED' || status === 'REJECTED';
 
           return (
-            <div key={transferId} className="p-3 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2 relative">
+            <div key={transferId} className="p-3 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2 relative group">
+              {/* Cancel Button */}
+              {!isCompleted && !isFailed && !isCancelled && (
+                <button
+                  onClick={() => onCancel(transferId)}
+                  className="absolute top-2 right-2 p-1 text-gray-500 hover:text-red-400 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                  title="Cancel Transfer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <div className="flex items-center gap-3">
                 {/* Direction Icons */}
                 <div className="flex-shrink-0">
                   {isCompleted ? (
                     <CheckCircle className="w-5 h-5 text-success-neon animate-scale-up" />
+                  ) : isCancelled ? (
+                    <XCircle className="w-5 h-5 text-gray-500 animate-scale-up" />
                   ) : isFailed ? (
                     <AlertCircle className="w-5 h-5 text-red-400" />
                   ) : isInbound ? (
@@ -57,20 +71,22 @@ export default function TransferTracker({ transfers }) {
                     <span>
                       {isCompleted 
                         ? 'Finished' 
-                        : isFailed 
-                          ? status === 'REJECTED' ? 'Rejected by peer' : 'Error occurred'
-                          : `${formatBytes(bytesReceived)} / ${formatBytes(fileSize)}`
+                        : isCancelled
+                          ? 'Cancelled'
+                          : isFailed 
+                            ? status === 'REJECTED' ? 'Rejected by peer' : 'Error occurred'
+                            : `${formatBytes(bytesReceived)} / ${formatBytes(fileSize)}`
                       }
                     </span>
                     <span className="font-bold text-white">
-                      {isCompleted ? '100%' : `${percent}%`}
+                      {isCompleted ? '100%' : isCancelled ? '0%' : `${percent}%`}
                     </span>
                   </div>
                 </div>
               </div>
 
               {/* Progress Bar */}
-              {!isCompleted && !isFailed && (
+              {!isCompleted && !isFailed && !isCancelled && (
                 <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
                   <div 
                     className={`h-full transition-all duration-300 rounded-full ${

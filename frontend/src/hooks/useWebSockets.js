@@ -151,6 +151,16 @@ export const useWebSockets = () => {
     setIncomingPrompt(null);
   };
 
+  // WebSocket cancel active transfer
+  const cancelTransfer = (transferId) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'CANCEL_TRANSFER',
+        data: { transferId }
+      }));
+    }
+  };
+
   useEffect(() => {
     fetchConfig();
     fetchFiles();
@@ -233,6 +243,27 @@ export const useWebSockets = () => {
               break;
 
             case 'TRANSFER_CANCELLED':
+              setIncomingPrompt(prev => prev && prev.transferId === data.transferId ? null : prev);
+              setActiveTransfers(prev => {
+                const item = prev[data.transferId];
+                if (!item) return prev;
+                return {
+                  ...prev,
+                  [data.transferId]: {
+                    ...item,
+                    status: 'CANCELLED'
+                  }
+                };
+              });
+              setTimeout(() => {
+                setActiveTransfers(prev => {
+                  const copy = { ...prev };
+                  delete copy[data.transferId];
+                  return copy;
+                });
+              }, 4000);
+              break;
+
             case 'TRANSFER_REJECTED':
               setIncomingPrompt(prev => prev && prev.transferId === data.transferId ? null : prev);
               setActiveTransfers(prev => {
@@ -335,6 +366,27 @@ export const useWebSockets = () => {
               }, 5000);
               break;
 
+            case 'SEND_CANCELLED':
+              setActiveTransfers(prev => {
+                const item = prev[data.transferId];
+                if (!item) return prev;
+                return {
+                  ...prev,
+                  [data.transferId]: {
+                    ...item,
+                    status: 'CANCELLED'
+                  }
+                };
+              });
+              setTimeout(() => {
+                setActiveTransfers(prev => {
+                  const copy = { ...prev };
+                  delete copy[data.transferId];
+                  return copy;
+                });
+              }, 4000);
+              break;
+
             default:
               console.log('[WS] Unhandled WebSocket event type:', type);
           }
@@ -380,6 +432,7 @@ export const useWebSockets = () => {
     sendToPeer,
     acceptTransfer,
     rejectTransfer,
+    cancelTransfer,
     refreshFiles: fetchFiles
   };
 };

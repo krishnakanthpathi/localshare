@@ -21,7 +21,8 @@ export default function App() {
     deleteLocalFile,
     sendToPeer,
     acceptTransfer,
-    rejectTransfer
+    rejectTransfer,
+    cancelTransfer
   } = useWebSockets();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -173,7 +174,7 @@ export default function App() {
       </main>
 
       {/* Floating active transfer widgets overlay */}
-      <TransferTracker transfers={activeTransfers} />
+      <TransferTracker transfers={activeTransfers} onCancel={cancelTransfer} />
 
       {/* Interactive Handshake prompts */}
       {incomingPrompt && (

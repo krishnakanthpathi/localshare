@@ -36,6 +36,8 @@ class TcpTransferService {
     this.server = null;
     this.pendingTransfers = new Map(); // transferId -> { socket, metadata, remaining }
     this.activeTransfers = new Map();  // transferId -> { bytesReceived, fileSize, status, fileName }
+    this.runningTransfers = new Map(); // transferId -> { socket, filePath, isFolder, writeStream }
+    this.runningSends = new Map();     // transferId -> { socket, tempZipPath }
   }
 
   start() {
@@ -142,6 +144,15 @@ class TcpTransferService {
     let filePath = '';
     let writeStream = null;
 
+    if (metadata.isFolder) {
+      const folderName = metadata.fileName.endsWith('.zip') 
+        ? metadata.fileName.substring(0, metadata.fileName.length - 4) 
+        : metadata.fileName;
+      filePath = getUniqueFilePath(baseDir, folderName);
+    } else {
+      filePath = getUniqueFilePath(baseDir, metadata.fileName);
+    }
+
     console.log(`[TCP Server] Accepted file transfer for: ${metadata.fileName}`);
 
     // Track active receive progress
@@ -154,18 +165,22 @@ class TcpTransferService {
     };
     this.activeTransfers.set(transferId, activeInfo);
 
+    // Track active socket connection and file descriptors for cancel operations
+    const transferEntry = {
+      socket,
+      filePath,
+      isFolder: metadata.isFolder,
+      writeStream: null
+    };
+    this.runningTransfers.set(transferId, transferEntry);
+
     // Notify sender we are ready to stream
     socket.write('ACCEPT\n');
 
     let extractionPromise = null;
 
     if (metadata.isFolder) {
-      const folderName = metadata.fileName.endsWith('.zip') 
-        ? metadata.fileName.substring(0, metadata.fileName.length - 4) 
-        : metadata.fileName;
-      
-      const targetFolder = getUniqueFilePath(baseDir, folderName);
-      ensureDirExists(targetFolder);
+      ensureDirExists(filePath);
 
       let lastProgressUpdate = 0;
       const progress = new ProgressStream((bytes) => {
@@ -182,7 +197,7 @@ class TcpTransferService {
       });
 
       const unifiedStream = new PassThrough();
-      extractionPromise = extractZipStream(unifiedStream.pipe(progress), targetFolder);
+      extractionPromise = extractZipStream(unifiedStream.pipe(progress), filePath);
 
       if (remaining.length > 0) {
         unifiedStream.write(remaining);
@@ -190,8 +205,8 @@ class TcpTransferService {
       socket.pipe(unifiedStream);
 
     } else {
-      filePath = getUniqueFilePath(baseDir, metadata.fileName);
       writeStream = fs.createWriteStream(filePath);
+      transferEntry.writeStream = writeStream;
 
       let lastProgressUpdate = 0;
       const progress = new ProgressStream((bytes) => {
@@ -223,6 +238,8 @@ class TcpTransferService {
       activeInfo.bytesReceived = metadata.fileSize;
       console.log(`[TCP Server] Completed file transfer: ${metadata.fileName}`);
       
+      this.runningTransfers.delete(transferId);
+
       websocketService.broadcast('TRANSFER_COMPLETE', {
         transferId,
         fileName: metadata.fileName,
@@ -240,13 +257,23 @@ class TcpTransferService {
     const handleTransferError = (err) => {
       console.error(`[TCP Server] Transfer error for ${metadata.fileName}:`, err.message);
       activeInfo.status = 'FAILED';
+      
+      this.runningTransfers.delete(transferId);
+
       websocketService.broadcast('TRANSFER_ERROR', { transferId, error: err.message });
       socket.destroy();
       this.activeTransfers.delete(transferId);
       
       // Clean up corrupt/partial files
       if (filePath && fs.existsSync(filePath)) {
-        fs.unlink(filePath, () => {});
+        try {
+          const stats = fs.statSync(filePath);
+          if (stats.isDirectory()) {
+            fs.rmSync(filePath, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(filePath);
+          }
+        } catch (unlinkErr) {}
       }
     };
 
@@ -324,6 +351,8 @@ class TcpTransferService {
           client.write(metadataBuf);
         });
 
+        this.runningSends.set(transferId, { socket: client, tempZipPath });
+
         let responseBuffer = '';
         const handleResponse = (data) => {
           responseBuffer += data.toString();
@@ -393,6 +422,7 @@ class TcpTransferService {
       };
 
       const cleanupTempZip = () => {
+        this.runningSends.delete(transferId);
         if (tempZipPath && fs.existsSync(tempZipPath)) {
           try {
             fs.unlinkSync(tempZipPath);
@@ -426,6 +456,68 @@ class TcpTransferService {
     });
   }
 
+  cancelTransfer(transferId) {
+    console.log(`[TCP] Cancel request received for: ${transferId}`);
+
+    // 1. If it's a pending connection request
+    if (this.pendingTransfers.has(transferId)) {
+      this.rejectTransfer(transferId);
+      return;
+    }
+
+    // 2. If it's an active inbound receive transfer
+    if (this.runningTransfers.has(transferId)) {
+      const { socket, filePath, writeStream } = this.runningTransfers.get(transferId);
+      this.runningTransfers.delete(transferId);
+      this.activeTransfers.delete(transferId);
+
+      try {
+        socket.destroy();
+      } catch (err) {}
+
+      try {
+        if (writeStream) writeStream.destroy();
+      } catch (err) {}
+
+      if (filePath && fs.existsSync(filePath)) {
+        setTimeout(() => {
+          try {
+            const stats = fs.statSync(filePath);
+            if (stats.isDirectory()) {
+              fs.rmSync(filePath, { recursive: true, force: true });
+            } else {
+              fs.unlinkSync(filePath);
+            }
+          } catch (err) {}
+        }, 100);
+      }
+
+      console.log(`[TCP Server] Inbound transfer ${transferId} aborted.`);
+      websocketService.broadcast('TRANSFER_CANCELLED', { transferId });
+      return;
+    }
+
+    // 3. If it's an active outbound send transfer
+    if (this.runningSends.has(transferId)) {
+      const { socket, tempZipPath } = this.runningSends.get(transferId);
+      this.runningSends.delete(transferId);
+
+      try {
+        socket.destroy();
+      } catch (err) {}
+
+      if (tempZipPath && fs.existsSync(tempZipPath)) {
+        try {
+          fs.unlinkSync(tempZipPath);
+        } catch (err) {}
+      }
+
+      console.log(`[TCP Client] Outbound transfer ${transferId} aborted.`);
+      websocketService.broadcast('SEND_CANCELLED', { transferId });
+      return;
+    }
+  }
+
   stop() {
     if (this.server) {
       try {
@@ -438,8 +530,20 @@ class TcpTransferService {
         transfer.socket.destroy();
       } catch (err) {}
     }
+    for (const transfer of this.runningTransfers.values()) {
+      try {
+        transfer.socket.destroy();
+      } catch (err) {}
+    }
+    for (const send of this.runningSends.values()) {
+      try {
+        send.socket.destroy();
+      } catch (err) {}
+    }
     this.pendingTransfers.clear();
     this.activeTransfers.clear();
+    this.runningTransfers.clear();
+    this.runningSends.clear();
   }
 }
 
