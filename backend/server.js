@@ -75,11 +75,18 @@ const shutdown = () => {
   
   discoveryService.stop();
   tcpTransferService.stop();
+  websocketService.stop();
   
   server.close(() => {
-    console.log('HTTP & WebSocket servers closed.');
+    console.log('HTTP server closed.');
     process.exit(0);
   });
+
+  // Force exit after 1.5 seconds if keep-alive connections hold the server open
+  setTimeout(() => {
+    console.log('Forcing process shutdown...');
+    process.exit(0);
+  }, 1500);
 };
 
 process.on('SIGINT', shutdown);

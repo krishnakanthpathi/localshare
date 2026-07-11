@@ -61,6 +61,23 @@ class WebSocketService {
       }
     }
   }
+
+  // Forcefully terminate all active WebSocket clients and close server
+  stop() {
+    if (this.wss) {
+      console.log('[WS] Terminating all active client connections...');
+      for (const client of this.clients) {
+        try {
+          client.terminate();
+        } catch (err) {}
+      }
+      this.clients.clear();
+      try {
+        this.wss.close();
+      } catch (err) {}
+      this.wss = null;
+    }
+  }
 }
 
 const websocketService = new WebSocketService();
