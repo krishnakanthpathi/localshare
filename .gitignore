@@ -1,0 +1,30 @@
+# Dependency directories
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Local configuration files
+backend/.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build output
+frontend/dist/
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Large archives and temporary folders
+*.zip
+*.tar.gz
+backend/uploads/*
+scratch_test_data/
+tmp/
