@@ -25,6 +25,37 @@ export default function App() {
   } = useWebSockets();
 
   const [showSettings, setShowSettings] = useState(false);
+  const [manualPeers, setManualPeers] = useState([]);
+
+  // Combine auto-discovered and manual peers, filtering duplicates
+  const combinedPeers = [
+    ...peers,
+    ...manualPeers.filter(mp => !peers.some(ap => ap.ip === mp.ip))
+  ];
+
+  const handleAddManualPeer = (ip) => {
+    // Validates IPv4 (both standard LAN and Tailscale overlay blocks)
+    const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (!ipPattern.test(ip)) {
+      alert('Please enter a valid IPv4 address (e.g. 100.67.25.84)');
+      return;
+    }
+
+    if (peers.some(p => p.ip === ip) || manualPeers.some(p => p.ip === ip)) {
+      alert('This device IP is already on your radar.');
+      return;
+    }
+
+    const newPeer = {
+      id: `manual_${Date.now()}`,
+      name: `Tailscale Peer @ ${ip}`,
+      ip: ip,
+      port: 5051, // Default P2P TCP port
+      os: 'unknown'
+    };
+
+    setManualPeers(prev => [...prev, newPeer]);
+  };
 
   // Core handler for dragging & dropping or browsing files to send to a remote peer
   const handleSendToPeer = async (peer, files) => {
@@ -119,9 +150,10 @@ export default function App() {
         {/* LAN Peers */}
         <section>
           <PeerGrid 
-            peers={peers} 
+            peers={combinedPeers} 
             onSendFile={handleSendToPeer} 
             isWsConnected={isWsConnected} 
+            onAddManualPeer={handleAddManualPeer}
           />
         </section>
 
@@ -132,7 +164,7 @@ export default function App() {
         <section className="mb-8">
           <LocalExplorer 
             files={localFiles} 
-            peers={peers}
+            peers={combinedPeers}
             onUpload={uploadLocalFile} 
             onDelete={deleteLocalFile}
             onSendFile={handleQuickShare}

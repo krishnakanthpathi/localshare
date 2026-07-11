@@ -19,10 +19,19 @@ const getOSName = (osType) => {
   return 'Mobile';
 };
 
-export default function PeerGrid({ peers, onSendFile, isWsConnected }) {
+export default function PeerGrid({ peers, onSendFile, isWsConnected, onAddManualPeer }) {
   const [draggingPeerId, setDraggingPeerId] = useState(null);
   const [sendingPeerId, setSendingPeerId] = useState(null);
+  const [newPeerIp, setNewPeerIp] = useState('');
   const fileInputRefs = useRef({});
+
+  const handleAddSubmit = (e) => {
+    e.preventDefault();
+    if (newPeerIp && newPeerIp.trim()) {
+      onAddManualPeer(newPeerIp.trim());
+      setNewPeerIp('');
+    }
+  };
 
   const handleDragOver = (e, peerId) => {
     e.preventDefault();
@@ -62,7 +71,7 @@ export default function PeerGrid({ peers, onSendFile, isWsConnected }) {
 
   return (
     <div className="w-full">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <h2 className="text-xl font-semibold text-white flex items-center gap-2">
           <span className="relative flex h-3 w-3">
             <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isWsConnected ? 'bg-primary-neon' : 'bg-red-500'}`}></span>
@@ -70,9 +79,29 @@ export default function PeerGrid({ peers, onSendFile, isWsConnected }) {
           </span>
           Local Network Radar
         </h2>
-        <span className="text-sm text-gray-400">
-          {peers.length === 1 ? '1 active peer' : `${peers.length} active peers`}
-        </span>
+        
+        <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+          {/* Add Manual Peer Form */}
+          <form onSubmit={handleAddSubmit} className="flex items-center gap-2 flex-grow sm:flex-grow-0">
+            <input
+              type="text"
+              value={newPeerIp}
+              onChange={(e) => setNewPeerIp(e.target.value)}
+              placeholder="Add Tailscale / Remote IP..."
+              className="bg-white/5 border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary-neon w-full sm:w-48 transition-all"
+            />
+            <button
+              type="submit"
+              className="bg-primary-neon hover:opacity-90 text-white rounded-xl px-4 py-2 text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+            >
+              Add Peer
+            </button>
+          </form>
+          
+          <span className="text-sm text-gray-400 hidden sm:inline">
+            {peers.length === 1 ? '1 active peer' : `${peers.length} active peers`}
+          </span>
+        </div>
       </div>
 
       {peers.length === 0 ? (
