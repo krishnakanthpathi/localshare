@@ -36,8 +36,7 @@ const getFileIcon = (fileName, isFolder) => {
 
 export default function LocalExplorer({ files, peers, onUpload, onDelete, onSendFile }) {
   const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [showShareMenu, setShowShareMenu] = useState(null); // fileName
+  const [shareFile, setShareFile] = useState(null); // file object for quick share modal
   const fileInputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -71,11 +70,6 @@ export default function LocalExplorer({ files, peers, onUpload, onDelete, onSend
     if (fileInputRef.current) {
       fileInputRef.current.click();
     }
-  };
-
-  const triggerQuickShare = async (peer, fileName) => {
-    setShowShareMenu(null);
-    await onSendFile(peer, fileName);
   };
 
   const downloadUrl = (fileName) => {
@@ -122,34 +116,13 @@ export default function LocalExplorer({ files, peers, onUpload, onDelete, onSend
                   <div className="flex items-center gap-2 relative">
                     {/* Share Button (P2P Send) */}
                     {peers.length > 0 && (
-                      <div className="relative">
-                        <button
-                          onClick={() => setShowShareMenu(showShareMenu === file.name ? null : file.name)}
-                          className="p-2 text-gray-400 hover:text-primary-neon rounded-lg hover:bg-white/5 transition-all cursor-pointer"
-                          title="Share with network peer"
-                        >
-                          <Send className="w-4 h-4" />
-                        </button>
-
-                        {/* Inline Share Peer Dropdown */}
-                        {showShareMenu === file.name && (
-                          <div className="absolute right-0 bottom-10 z-30 w-48 py-1 rounded-xl glass border border-white/10 shadow-2xl animate-fade-in text-left">
-                            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 border-b border-white/5">
-                              Send to peer:
-                            </div>
-                            {peers.map((peer) => (
-                              <button
-                                key={peer.id}
-                                onClick={() => triggerQuickShare(peer, file.name)}
-                                className="w-full px-3 py-2 text-xs text-white hover:bg-primary-neon/20 hover:text-white transition-all text-left flex items-center gap-2 cursor-pointer"
-                              >
-                                <div className="w-1.5 h-1.5 rounded-full bg-primary-neon"></div>
-                                <span className="truncate flex-1">{peer.name}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => setShareFile(file)}
+                        className="p-2 text-gray-400 hover:text-primary-neon rounded-lg hover:bg-white/5 transition-all cursor-pointer"
+                        title="Share with network peer"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
                     )}
 
                     {/* Download to Browser */}
@@ -210,6 +183,39 @@ export default function LocalExplorer({ files, peers, onUpload, onDelete, onSend
           </p>
         </div>
       </div>
+
+      {/* Quick Share Modal Overlay */}
+      {shareFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm overflow-hidden rounded-2xl glass shadow-2xl border border-white/10 p-6 text-center animate-scale-up">
+            <h3 className="font-bold text-lg text-white mb-2">Share File</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              Select a peer to share <span className="text-white font-medium">"{shareFile.name}"</span>
+            </p>
+            <div className="flex flex-col gap-2 mb-6">
+              {peers.map((peer) => (
+                <button
+                  key={peer.id}
+                  onClick={() => {
+                    onSendFile(peer, shareFile.name);
+                    setShareFile(null);
+                  }}
+                  className="w-full flex items-center justify-between p-3.5 rounded-xl border border-white/10 hover:border-primary-neon hover:bg-primary-neon/10 transition-all text-white font-semibold cursor-pointer text-sm"
+                >
+                  <span>{peer.name}</span>
+                  <span className="text-xs text-gray-400 font-mono">{peer.ip}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShareFile(null)}
+              className="w-full py-2.5 rounded-xl border border-white/10 hover:bg-white/5 text-gray-300 font-medium transition-all cursor-pointer text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
