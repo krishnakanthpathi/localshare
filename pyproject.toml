@@ -1,0 +1,56 @@
+[build-system]
+requires = ["briefcase"]
+
+[project]
+name = "localshare"
+version = "1.0.0"
+description = "High-Speed Mesh File & Text Sharing System"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "qrcode>=8.0"
+]
+
+[tool.briefcase]
+project_name = "LocalShare"
+bundle = "com.localshare"
+version = "1.0.0"
+url = "https://github.com/krishnakanthpathi/localshare"
+author = "Krishnakanth Pathi"
+author_email = "krishnakanth@localshare.app"
+
+[tool.briefcase.app.localshare]
+formal_name = "LocalShare"
+description = "High-Speed Mesh File & Text Sharing System"
+long_description = "Cross-platform P2P mesh network file, folder, and clipboard sharing application built with FastAPI and React."
+icon = "frontend/public/favicon"
+sources = [
+    "main.py",
+    "config.py",
+    "utils.py",
+    "discovery",
+    "transfer",
+    "sync",
+    "ui",
+    "frontend/dist"
+]
+requires = [
+    "fastapi",
+    "uvicorn",
+    "qrcode"
+]
+
+[tool.briefcase.app.localshare.android]
+build_style = "project"
+permissions = [
+    "INTERNET",
+    "ACCESS_NETWORK_STATE",
+    "ACCESS_WIFI_STATE",
+    "CHANGE_WIFI_MULTICAST_STATE",
+    "READ_EXTERNAL_STORAGE",
+    "WRITE_EXTERNAL_STORAGE",
+    "MANAGE_EXTERNAL_STORAGE"
+]
+features = ["android.hardware.wifi"]
