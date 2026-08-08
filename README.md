@@ -2,57 +2,82 @@
 
 An enterprise-grade, peer-to-peer **LocalShare** engine for instant file, folder, and clipboard/text sharing across local Wi-Fi, Ethernet, and Tailscale mesh networks.
 
-## ✨ Features
+---
 
-- **🌐 Binding & IP Routing**: Binds to `0.0.0.0` across all interfaces (Local WiFi `192.168.x.x` & Tailscale `100.x.x.x`).
-- **📡 UDP Auto-Discovery**: Automatic device discovery on port `41234` with broadcast and active scan capabilities.
-- **⏩ Resumable Multi-Socket TCP Transfer**: Efficient binary protocol supporting chunk streaming, checksum verification, and resumable partial transfers.
-- **📁 Directory Tree Preservation**: Batch upload entire folder structures while maintaining nested file hierarchies.
-- **📋 Real-Time Clipboard & Text Sync**: Instantly broadcast code snippets and copy text between devices.
-- **📱 Zero-Install Web Client & QR Code**: Embedded HTTP server serving a modern dark-mode web application (`http://<IP>:4000`) with ANSI and SVG QR code generation for instant mobile browser connection.
-- **🛡️ Security & Malware Protection**: Directory traversal sanitization (`../` blocking) and suspicious executable file warnings.
-- **⚡ Smart On-The-Fly Compression**: Dynamic `gzip` stream compression for text, code, logs, and uncompressed folder streams.
-- **🔔 Receive Approval Toggle**: Auto-accept or prompt confirmation modal before downloading incoming transfers.
-- **🤖 Native MCP Tool Server**: Standard Model Context Protocol integration (`python main.py mcp`) allowing AI agents (like Antigravity / Claude) to discover peers, send files, sync clipboard text, and monitor transfers programmatically.
+## 📁 Repository Structure
+
+LocalShare is bifurcated into three distinct, independent sub-folders:
+
+```
+localshare/
+├── ⚙️ backend/       # FastAPI REST API, TCP transfer engine, UDP discovery
+├── 💻 frontend/      # React 19 + Vite + TailwindCSS Web UI
+└── 🤖 mcp/           # FastMCP Model Context Protocol integration server
+```
+
+Each folder has its own configuration (`.env`), entry points, scripts, and documentation so that services can be configured and run independently on different ports and hosts.
 
 ---
 
-## 🚀 Quick Start
+## ⚙️ 1. Backend (`localshare/backend`)
 
-### 1. Start Server Node (CLI + Web UI)
+The backend powers FastAPI HTTP REST endpoints, multi-socket TCP file streaming, and UDP discovery beacons.
+
 ```bash
-cd localshare
+cd localshare/backend
 python3 main.py
-# or
-python3 main.py server
 ```
 
-Access the Web UI from any phone or computer on the network at `http://<YOUR_IP>:4000` or scan the terminal QR code.
-
-### 2. Scan Network for Peers
-```bash
-python3 main.py scan
+### Environment Settings (`localshare/backend/.env`)
+```ini
+HOST=0.0.0.0
+WEB_PORT=4000
+TCP_PORT=4001
+UDP_PORT=41234
+UPLOAD_DIR=~/Downloads/LocalShare
 ```
 
-### 3. Send File or Folder via CLI
+---
+
+## 💻 2. Frontend (`localshare/frontend`)
+
+The frontend is a modern dark-mode React 19 web interface built with Vite.
+
 ```bash
-python3 main.py send /path/to/my_file.pdf --target 192.168.1.50
+cd localshare/frontend
+npm install
+npm run dev
 ```
 
-### 4. Broadcast Text Snippet
-```bash
-python3 main.py text "Hello LocalShare Mesh!"
+### Environment Settings (`localshare/frontend/.env`)
+```ini
+VITE_PORT=5173
+VITE_API_BASE_URL=http://localhost:4000
 ```
 
-### 5. Run MCP Tool Server (for AI Agents)
+---
+
+## 🤖 3. MCP Service (`localshare/mcp`)
+
+The Model Context Protocol (FastMCP) server enables AI agents to discover peers, send files, and manage transfers.
+
 ```bash
-python3 main.py mcp
+cd localshare/mcp
+python3 mcp_server.py
+```
+
+### Environment Settings (`localshare/mcp/.env`)
+```ini
+MCP_PORT=8000
+BACKEND_API_URL=http://localhost:4000
 ```
 
 ---
 
 ## 🧪 Running Unit Tests
 
+To run automated unit & integration tests across the backend and MCP modules:
+
 ```bash
-python3 -m unittest localshare/tests/test_localshare.py
+python3 -m unittest discover -s localshare/backend/tests
 ```

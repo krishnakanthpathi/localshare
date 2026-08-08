@@ -5,8 +5,12 @@ Interfaces with OS clipboard (macOS pbcopy/pbpaste, Linux xclip, Windows powersh
 
 import sys
 import subprocess
-from ..config import state
-from ..transfer.client import TCPClientEngine
+try:
+    from config import state
+    from transfer.client import TCPClientEngine
+except ImportError:
+    from ..config import state
+    from ..transfer.client import TCPClientEngine
 
 class ClipboardManager:
     @staticmethod

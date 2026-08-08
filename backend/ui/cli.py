@@ -6,13 +6,22 @@ import sys
 import time
 import os
 import argparse
-from ..config import state, TCP_PORT, WEB_PORT
-from ..utils import get_network_interfaces, generate_qr_code_ascii
-from ..discovery.udp_beacon import UDPDiscoveryServer, discover_peers
-from ..transfer.server import TCPServerEngine
-from ..transfer.client import TCPClientEngine
-from ..sync.clipboard import ClipboardManager
-from .web_server import WebServerManager
+try:
+    from config import state, TCP_PORT, WEB_PORT
+    from utils import get_network_interfaces, generate_qr_code_ascii
+    from discovery.udp_beacon import UDPDiscoveryServer, discover_peers
+    from transfer.server import TCPServerEngine
+    from transfer.client import TCPClientEngine
+    from sync.clipboard import ClipboardManager
+    from ui.web_server import WebServerManager
+except ImportError:
+    from ..config import state, TCP_PORT, WEB_PORT
+    from ..utils import get_network_interfaces, generate_qr_code_ascii
+    from ..discovery.udp_beacon import UDPDiscoveryServer, discover_peers
+    from ..transfer.server import TCPServerEngine
+    from ..transfer.client import TCPClientEngine
+    from ..sync.clipboard import ClipboardManager
+    from .web_server import WebServerManager
 
 def print_banner(net_info):
     """Print ASCII banner and connection info."""

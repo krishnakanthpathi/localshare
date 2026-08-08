@@ -93,9 +93,17 @@ export default function App() {
         const activeUploading = prev.filter((t) => t.status === 'UPLOADING');
         const merged = [...backendData];
         for (let item of activeUploading) {
-          const idx = merged.findIndex((b) => b.id === item.id);
+          const idx = merged.findIndex(
+            (b) => b.id === item.id || (b.filename === item.filename && (b.rel_path === item.rel_path || !b.rel_path))
+          );
           if (idx !== -1) {
-            merged[idx] = { ...merged[idx], received_bytes: item.received_bytes, speed: item.speed };
+            merged[idx] = {
+              ...merged[idx],
+              id: item.id,
+              status: merged[idx].status || item.status,
+              received_bytes: Math.max(merged[idx].received_bytes || 0, item.received_bytes || 0),
+              speed: item.speed || merged[idx].speed || 0
+            };
           } else {
             merged.unshift(item);
           }
@@ -161,6 +169,32 @@ export default function App() {
 
   const stopFolderBatch = (items) => {
     items.forEach((item) => stopTransfer(item.id));
+  };
+
+  const deleteTransfer = async (transferId, deleteFile = false) => {
+    try {
+      await fetch('/api/transfers/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transfer_id: transferId, delete_file: deleteFile })
+      });
+    } catch (e) {
+      console.error(e);
+    }
+    setTransfers((prev) => prev.filter((t) => t.id !== transferId));
+  };
+
+  const deleteFolderBatch = (items, deleteFile = false) => {
+    items.forEach((item) => deleteTransfer(item.id, deleteFile));
+  };
+
+  const clearAllTransfers = async () => {
+    try {
+      await fetch('/api/transfers/clear', { method: 'POST' });
+    } catch (e) {
+      console.error(e);
+    }
+    setTransfers([]);
   };
 
   const shutdownNode = async () => {
@@ -286,7 +320,7 @@ export default function App() {
         delete activeXhrs.current[tempId];
       };
 
-      xhr.open('POST', '/api/upload', true);
+      xhr.open('POST', `/api/upload?transfer_id=${encodeURIComponent(tempId)}&rel_path=${encodeURIComponent(relPath)}`, true);
       xhr.send(formData);
     }
   };
@@ -573,7 +607,18 @@ export default function App() {
               <h2 className="text-sm font-semibold flex items-center gap-2 text-white">
                 <HardDrive className="w-4 h-4 text-white" /> Transfers & Subfolder Batch Progress
               </h2>
-              <span className="text-[11px] text-zinc-500 font-mono">{groupedTransfers.length} Batches</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-zinc-500 font-mono">{groupedTransfers.length} Batches</span>
+                {groupedTransfers.length > 0 && (
+                  <button
+                    onClick={clearAllTransfers}
+                    className="px-2 py-1 rounded bg-zinc-900 border border-zinc-800 hover:bg-red-950/40 hover:border-red-900/50 text-zinc-400 hover:text-red-400 text-xs font-mono transition-colors flex items-center gap-1"
+                    title="Clear all completed/cancelled transfers from menu"
+                  >
+                    <Trash2 className="w-3 h-3" /> Clear Menu
+                  </button>
+                )}
+              </div>
             </div>
 
             {groupedTransfers.length === 0 ? (
@@ -674,6 +719,13 @@ export default function App() {
                               <Download className="w-3.5 h-3.5" /> Download
                             </a>
                           )}
+                          <button
+                            onClick={() => deleteFolderBatch(group.items)}
+                            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-red-950/40 hover:border-red-900/50 text-zinc-400 hover:text-red-400 transition-colors flex items-center gap-1"
+                            title="Delete transfer from menu"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 

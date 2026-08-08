@@ -8,8 +8,12 @@ import json
 import time
 import threading
 import sys
-from ..config import UDP_PORT, TCP_PORT, WEB_PORT
-from ..utils import get_network_interfaces
+try:
+    from config import UDP_PORT, TCP_PORT, WEB_PORT
+    from utils import get_network_interfaces
+except ImportError:
+    from ..config import UDP_PORT, TCP_PORT, WEB_PORT
+    from ..utils import get_network_interfaces
 
 class UDPDiscoveryServer:
     def __init__(self, device_name=None):

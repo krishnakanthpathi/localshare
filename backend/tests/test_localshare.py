@@ -9,15 +9,24 @@ import tempfile
 import time
 import json
 import socket
-from fastapi.testclient import TestClient
+import sys
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+localshare_dir = os.path.abspath(os.path.join(backend_dir, ".."))
+mcp_dir = os.path.abspath(os.path.join(localshare_dir, "mcp"))
 
-from localshare.config import state
-from localshare.utils import get_network_interfaces, sanitize_relative_path, safe_join, is_suspicious_file
-from localshare.transfer.protocol import send_message, receive_message
-from localshare.transfer.server import TCPServerEngine
-from localshare.transfer.client import TCPClientEngine
-from localshare.ui.web_server import app
-from localshare.mcp_service.mcp_server import localshare_discover_peers, localshare_toggle_approval
+for d in [backend_dir, mcp_dir, localshare_dir]:
+    if d in sys.path:
+        sys.path.remove(d)
+    sys.path.insert(0, d)
+
+from fastapi.testclient import TestClient
+from config import state
+from utils import get_network_interfaces, sanitize_relative_path, safe_join, is_suspicious_file
+from transfer.protocol import send_message, receive_message
+from transfer.server import TCPServerEngine
+from transfer.client import TCPClientEngine
+from main import app
+from mcp_server import localshare_discover_peers, localshare_toggle_approval
 
 class TestLocalShare(unittest.TestCase):
 
@@ -148,6 +157,26 @@ class TestLocalShare(unittest.TestCase):
         res_discover = localshare_discover_peers(timeout=0.5)
         self.assertEqual(res_discover["status"], "success")
         self.assertIn("peers", res_discover)
+
+    def test_delete_and_clear_transfers(self):
+        client = TestClient(app)
+        state.transfers = [
+            {"id": "t_101", "filename": "doc.pdf", "status": "COMPLETED"},
+            {"id": "t_102", "filename": "img.png", "status": "CANCELLED"}
+        ]
+        self.assertEqual(len(state.transfers), 2)
+
+        # Delete single transfer
+        res_del = client.post("/api/transfers/delete", json={"transfer_id": "t_101"})
+        self.assertEqual(res_del.status_code, 200)
+        self.assertEqual(res_del.json()["status"], "success")
+        self.assertEqual(len(state.transfers), 1)
+
+        # Clear remaining transfers
+        res_clr = client.post("/api/transfers/clear")
+        self.assertEqual(res_clr.status_code, 200)
+        self.assertEqual(res_clr.json()["status"], "success")
+        self.assertEqual(len(state.transfers), 0)
 
 if __name__ == "__main__":
     unittest.main()

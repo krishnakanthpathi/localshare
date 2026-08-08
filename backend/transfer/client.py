@@ -9,8 +9,12 @@ import gzip
 import time
 import uuid
 import threading
-from ..config import TCP_PORT, BUFFER_SIZE, PARALLEL_STREAMS_THRESHOLD, PARALLEL_STREAMS_COUNT
-from ..utils import is_compressible_file, compute_file_hash
+try:
+    from config import TCP_PORT, BUFFER_SIZE, PARALLEL_STREAMS_THRESHOLD, PARALLEL_STREAMS_COUNT
+    from utils import is_compressible_file, compute_file_hash
+except ImportError:
+    from ..config import TCP_PORT, BUFFER_SIZE, PARALLEL_STREAMS_THRESHOLD, PARALLEL_STREAMS_COUNT
+    from ..utils import is_compressible_file, compute_file_hash
 from .protocol import send_message, receive_message
 
 class TCPClientEngine:

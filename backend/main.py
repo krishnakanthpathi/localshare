@@ -11,21 +11,33 @@ import socket
 import threading
 import urllib.parse
 import webbrowser
-from fastapi import FastAPI, UploadFile, File, Response, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, Response, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-# Ensure localshare parent directory is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure backend directory and localshare root are in sys.path
+backend_dir = os.path.abspath(os.path.dirname(__file__))
+parent_dir = os.path.abspath(os.path.join(backend_dir, ".."))
+for d in [backend_dir, parent_dir]:
+    if d not in sys.path:
+        sys.path.insert(0, d)
 
-from localshare.config import WEB_PORT, state
-from localshare.utils import get_network_interfaces, generate_qr_code_svg, generate_qr_code_ascii, safe_join, is_suspicious_file
-from localshare.sync.clipboard import ClipboardManager
-from localshare.discovery.udp_beacon import UDPDiscoveryServer
-from localshare.transfer.server import TCPServerEngine
-from localshare.transfer.client import TCPClientEngine
+try:
+    from config import WEB_PORT, HOST, state
+    from utils import get_network_interfaces, generate_qr_code_svg, generate_qr_code_ascii, safe_join, is_suspicious_file
+    from sync.clipboard import ClipboardManager
+    from discovery.udp_beacon import UDPDiscoveryServer
+    from transfer.server import TCPServerEngine
+    from transfer.client import TCPClientEngine
+except ImportError:
+    from localshare.backend.config import WEB_PORT, HOST, state
+    from localshare.backend.utils import get_network_interfaces, generate_qr_code_svg, generate_qr_code_ascii, safe_join, is_suspicious_file
+    from localshare.backend.sync.clipboard import ClipboardManager
+    from localshare.backend.discovery.udp_beacon import UDPDiscoveryServer
+    from localshare.backend.transfer.server import TCPServerEngine
+    from localshare.backend.transfer.client import TCPClientEngine
 
 # -----------------------------------------------------------------------------
 # FastAPI App & Middleware Setup
@@ -41,7 +53,7 @@ app.add_middleware(
 )
 
 udp_server_ref = None
-dist_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend", "dist"))
+dist_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 
 # -----------------------------------------------------------------------------
 # REST API & Web Routes
@@ -108,6 +120,91 @@ async def cancel_transfer(request: Request):
             t["speed"] = 0
             return {"status": "success", "message": f"Transfer {tid} cancelled"}
     return {"status": "error", "message": "Transfer not found"}
+
+@app.delete("/api/transfers/{transfer_id}")
+@app.post("/api/transfers/delete")
+async def delete_transfer(transfer_id: str = None, request: Request = None, delete_file: bool = False):
+    tid = transfer_id
+    remove_disk_file = delete_file
+    if request:
+        try:
+            body = await request.json()
+            if not tid:
+                tid = body.get("transfer_id")
+            if "delete_file" in body:
+                remove_disk_file = bool(body["delete_file"])
+        except Exception:
+            pass
+
+    if not tid:
+        raise HTTPException(status_code=400, detail="Missing transfer_id")
+
+    found_idx = None
+    target_transfer = None
+    for idx, t in enumerate(state.transfers):
+        if t.get("id") == tid:
+            found_idx = idx
+            target_transfer = t
+            break
+
+    if found_idx is None:
+        return {"status": "error", "message": f"Transfer {tid} not found"}
+
+    removed_item = state.transfers.pop(found_idx)
+    file_deleted = False
+
+    if remove_disk_file and "filepath" in removed_item and removed_item["filepath"]:
+        try:
+            abs_fp = os.path.abspath(removed_item["filepath"])
+            abs_upload = os.path.abspath(state.upload_dir)
+            if abs_fp.startswith(abs_upload) and os.path.exists(abs_fp):
+                if os.path.isfile(abs_fp):
+                    os.remove(abs_fp)
+                    file_deleted = True
+                elif os.path.isdir(abs_fp):
+                    import shutil
+                    shutil.rmtree(abs_fp)
+                    file_deleted = True
+        except Exception as e:
+            print(f"⚠️ Error removing disk file: {e}")
+
+    return {
+        "status": "success",
+        "message": f"Transfer {tid} deleted from menu",
+        "transfer_id": tid,
+        "file_deleted": file_deleted
+    }
+
+@app.delete("/api/transfers")
+@app.post("/api/transfers/clear")
+async def clear_all_transfers(request: Request = None):
+    delete_files = False
+    if request:
+        try:
+            body = await request.json()
+            delete_files = bool(body.get("delete_files", False))
+        except Exception:
+            pass
+
+    cleared_count = len(state.transfers)
+    if delete_files:
+        for item in state.transfers:
+            fp = item.get("filepath")
+            if fp and os.path.exists(fp):
+                try:
+                    abs_fp = os.path.abspath(fp)
+                    abs_upload = os.path.abspath(state.upload_dir)
+                    if abs_fp.startswith(abs_upload):
+                        if os.path.isfile(abs_fp):
+                            os.remove(abs_fp)
+                        elif os.path.isdir(abs_fp):
+                            import shutil
+                            shutil.rmtree(abs_fp)
+                except Exception as e:
+                    print(f"⚠️ Error deleting disk file on clear: {e}")
+
+    state.transfers.clear()
+    return {"status": "success", "message": f"Cleared {cleared_count} transfer(s) from menu", "count": cleared_count}
 
 @app.post("/api/shutdown")
 async def shutdown_server():
@@ -178,13 +275,19 @@ async def respond_approval(request: Request):
 @app.post("/api/upload")
 async def handle_upload(
     file: list[UploadFile] = File(...),
-    transfer_id: str = None,
-    rel_path: str = None,
+    transfer_id: str = Form(None),
+    rel_path: str = Form(None),
     request: Request = None
 ):
     files_saved = []
     os.makedirs(state.upload_dir, exist_ok=True)
     sender_ip = request.client.host if request else "127.0.0.1"
+
+    if request:
+        if not transfer_id and "transfer_id" in request.query_params:
+            transfer_id = request.query_params["transfer_id"]
+        if not rel_path and "rel_path" in request.query_params:
+            rel_path = request.query_params["rel_path"]
 
     for uploaded_file in file:
         if uploaded_file.filename:

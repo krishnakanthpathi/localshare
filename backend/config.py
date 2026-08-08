@@ -5,22 +5,32 @@ LocalShare Configuration Module
 import os
 import socket
 
-# Ports
-UDP_PORT = 41234
-TCP_PORT = 4001  # Binary TCP socket transfer port
-WEB_PORT = 4000  # FastAPI HTTP Web UI & REST API port
+# Load .env if present
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+except ImportError:
+    pass
+
+# Host & Ports
+HOST = os.getenv("HOST", "0.0.0.0")
+UDP_PORT = int(os.getenv("UDP_PORT", "41234"))
+TCP_PORT = int(os.getenv("TCP_PORT", "4001"))   # Binary TCP socket transfer port
+WEB_PORT = int(os.getenv("WEB_PORT", os.getenv("PORT", "4000")))  # FastAPI HTTP Web UI & REST API port
 
 # Transfer Buffer Settings
-BUFFER_SIZE = 64 * 1024  # 64 KB chunk size for socket reads
+BUFFER_SIZE = int(os.getenv("BUFFER_SIZE", str(64 * 1024)))  # 64 KB chunk size for socket reads
 PARALLEL_STREAMS_THRESHOLD = 10 * 1024 * 1024  # Use multi-socket for files > 10MB
 PARALLEL_STREAMS_COUNT = 4  # 4 parallel sockets for fast transfers
 
 # Directories
-DEFAULT_UPLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "LocalShare")
+DEFAULT_UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.expanduser("~"), "Downloads", "LocalShare"))
 
 # Discovery Settings
-DISCOVERY_INTERVAL = 3  # Seconds
-DISCOVERY_TIMEOUT = 2   # Seconds
+DISCOVERY_INTERVAL = float(os.getenv("DISCOVERY_INTERVAL", "3"))  # Seconds
+DISCOVERY_TIMEOUT = float(os.getenv("DISCOVERY_TIMEOUT", "2"))   # Seconds
 
 # Security Rules
 SUSPICIOUS_EXTENSIONS = {

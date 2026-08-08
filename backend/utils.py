@@ -91,13 +91,19 @@ def safe_join(base_dir, relative_path):
 
 def is_suspicious_file(filename):
     """Check if file has an executable/suspicious extension."""
-    from .config import SUSPICIOUS_EXTENSIONS
+    try:
+        from config import SUSPICIOUS_EXTENSIONS
+    except ImportError:
+        from .config import SUSPICIOUS_EXTENSIONS
     ext = os.path.splitext(filename)[1].lower()
     return ext in SUSPICIOUS_EXTENSIONS
 
 def is_compressible_file(filename):
     """Check if file format benefits from gzip compression."""
-    from .config import COMPRESSIBLE_EXTENSIONS
+    try:
+        from config import COMPRESSIBLE_EXTENSIONS
+    except ImportError:
+        from .config import COMPRESSIBLE_EXTENSIONS
     ext = os.path.splitext(filename)[1].lower()
     return ext in COMPRESSIBLE_EXTENSIONS
 

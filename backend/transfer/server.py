@@ -9,8 +9,9 @@ import os
 import gzip
 import time
 import uuid
-from ..config import TCP_PORT, BUFFER_SIZE, state
-from ..utils import safe_join, is_suspicious_file
+
+from config import TCP_PORT, BUFFER_SIZE, state
+from utils import safe_join, is_suspicious_file
 from .protocol import send_message, receive_message
 
 class TCPServerEngine:
