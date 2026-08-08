@@ -7,6 +7,30 @@ import os
 import socket
 import hashlib
 import re
+import subprocess
+import json
+import shutil
+
+def get_tailscale_info():
+    """
+    Query Tailscale daemon for self IP and active online peers.
+    Returns (self_ip, list_of_peer_ips).
+    """
+    ts_bin = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    try:
+        res = subprocess.run([ts_bin, "status", "--json"], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            self_ips = data.get("Self", {}).get("TailscaleIPs", [])
+            self_ip = self_ips[0] if self_ips else None
+            peer_ips = []
+            for peer in data.get("Peer", {}).values():
+                if peer.get("Online") and peer.get("TailscaleIPs"):
+                    peer_ips.append(peer["TailscaleIPs"][0])
+            return self_ip, peer_ips
+    except Exception:
+        pass
+    return None, []
 
 def get_network_interfaces():
     """
@@ -37,14 +61,21 @@ def get_network_interfaces():
     except Exception:
         pass
 
+    # Fetch Tailscale info
+    ts_self, _ = get_tailscale_info()
+    if ts_self and ts_self not in ips:
+        ips.append(ts_self)
+        tailscale_ip = ts_self
+
     # Ensure primary IP is included
     if primary_ip not in ips and primary_ip != "127.0.0.1":
         ips.insert(0, primary_ip)
 
-    # Check for Tailscale IP (100.x.x.x)
-    for ip in ips:
-        if ip.startswith("100."):
-            tailscale_ip = ip
+    # Check for Tailscale IP (100.x.x.x) if not set
+    if not tailscale_ip:
+        for ip in ips:
+            if ip.startswith("100."):
+                tailscale_ip = ip
 
     return {
         "primary": primary_ip,

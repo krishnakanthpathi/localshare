@@ -473,6 +473,7 @@ def run_main_server():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].lower() == "cli":
+        # pyrefly: ignore [missing-import]
         from localshare.ui.cli import run_cli
         run_cli()
     else:

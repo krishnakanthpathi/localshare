@@ -10,10 +10,10 @@ import threading
 import sys
 try:
     from config import UDP_PORT, TCP_PORT, WEB_PORT
-    from utils import get_network_interfaces
+    from utils import get_network_interfaces, get_tailscale_info
 except ImportError:
     from ..config import UDP_PORT, TCP_PORT, WEB_PORT
-    from ..utils import get_network_interfaces
+    from ..utils import get_network_interfaces, get_tailscale_info
 
 class UDPDiscoveryServer:
     def __init__(self, device_name=None):
@@ -116,9 +116,20 @@ class UDPDiscoveryServer:
         udp_socket.close()
 
     def _beacon_loop(self):
-        """Periodically broadcast presence on LAN subnets."""
+        """Periodically broadcast presence on LAN subnets & Tailscale peers."""
         while self.running:
             self.broadcast_announce()
+            try:
+                discovered = discover_peers(timeout=1.0)
+                now = time.time()
+                with self.lock:
+                    for peer in discovered:
+                        p_ip = peer["ip"]
+                        if p_ip not in self.net_info["all"] and p_ip != "127.0.0.1":
+                            peer["last_seen"] = now
+                            self.peers[p_ip] = peer
+            except Exception:
+                pass
             time.sleep(5)
 
     def broadcast_announce(self):
@@ -128,6 +139,15 @@ class UDPDiscoveryServer:
 
         packet = json.dumps({
             "type": "ANNOUNCE",
+            "name": self.device_name,
+            "ip": self.primary_ip,
+            "port": TCP_PORT,
+            "web_port": WEB_PORT,
+            "timestamp": time.time()
+        }).encode("utf-8")
+
+        discover_packet = json.dumps({
+            "type": "DISCOVER",
             "name": self.device_name,
             "ip": self.primary_ip,
             "port": TCP_PORT,
@@ -146,9 +166,17 @@ class UDPDiscoveryServer:
                 if subnet_bc not in targets:
                     targets.append(subnet_bc)
 
+        # Include Tailscale online peer IPs as direct targets
+        _, ts_peers = get_tailscale_info()
+        for ts_ip in ts_peers:
+            if ts_ip not in targets and ts_ip not in self.net_info["all"]:
+                targets.append(ts_ip)
+
         for target in targets:
             try:
                 udp_socket.sendto(packet, (target, UDP_PORT))
+                if target.startswith("100."):
+                    udp_socket.sendto(discover_packet, (target, UDP_PORT))
             except Exception:
                 pass
         
@@ -178,6 +206,12 @@ def discover_peers(timeout=2.0):
         parts = ip.split(".")
         if len(parts) == 4 and not ip.startswith("127."):
             targets.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+
+    # Include Tailscale online peer IPs
+    _, ts_peers = get_tailscale_info()
+    for ts_ip in ts_peers:
+        if ts_ip not in targets and ts_ip not in my_ips:
+            targets.append(ts_ip)
 
     for target in targets:
         try:
