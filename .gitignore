@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment and IDE
+.env
+.venv
+env/
+venv/
+ENV/
+.vscode/
+.idea/
+.DS_Store
+
+# Frontend Node modules & logs
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# User upload test output
+uploads/
+*.tmp
