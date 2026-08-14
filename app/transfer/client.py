@@ -1,0 +1,210 @@
+"""
+TCP Client Engine
+Handles outbound file transfers, multi-folder batch transmission, Gzip compression, and AES-256-GCM encryption.
+"""
+
+import socket
+import os
+import time
+import uuid
+from app.config import TCP_PORT, state
+from app.utils import is_compressible_file, compute_file_hash
+from app.transfer.protocol import send_message, receive_message
+from app.processing.engine import processor
+from app.security.encryption import encrypt_text
+from app.queue.models import TransferTask, BatchTransferTask, TransferStatus
+from app.queue.manager import queue_manager
+from app.db.mongo import record_transfer
+
+def send_text_snippet(
+    target_ip: str,
+    text: str,
+    target_port: int = TCP_PORT,
+    sender_name: str = None,
+    encrypt: bool = None
+) -> tuple[bool, str]:
+    """Send an encrypted or plain text snippet to target IP."""
+    use_encryption = state.encryption_enabled if encrypt is None else encrypt
+    payload_text = text
+
+    if use_encryption and state.encryption_key:
+        try:
+            payload_text = encrypt_text(text, state.encryption_key)
+        except Exception as e:
+            return False, f"Encryption failed: {e}"
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(5.0)
+    try:
+        sock.connect((target_ip, target_port))
+        send_message(sock, {
+            "type": "TEXT_SNIPPET",
+            "text": payload_text,
+            "sender": sender_name or state.device_name,
+            "is_encrypted": use_encryption,
+            "timestamp": time.time()
+        })
+        return True, "Snippet sent successfully."
+    except Exception as e:
+        return False, f"Failed to send snippet: {e}"
+    finally:
+        sock.close()
+
+def send_single_file(
+    target_ip: str,
+    file_path: str,
+    rel_path: str = None,
+    target_port: int = TCP_PORT,
+    progress_callback = None
+) -> tuple[bool, str]:
+    """Send a single file with streaming Gzip compression and AES-GCM encryption."""
+    if not os.path.exists(file_path):
+        return False, f"File not found: {file_path}"
+
+    filename = os.path.basename(file_path)
+    relative_name = rel_path or filename
+    filesize = os.path.getsize(file_path)
+    transfer_id = str(uuid.uuid4())
+
+    use_compression = state.compression_enabled and is_compressible_file(filename) and filesize > 1024
+    use_encryption = state.encryption_enabled and bool(state.encryption_key)
+    file_checksum = compute_file_hash(file_path)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(30.0)
+
+    try:
+        sock.connect((target_ip, target_port))
+        
+        # Send FILE_HEADER
+        send_message(sock, {
+            "type": "FILE_HEADER",
+            "transfer_id": transfer_id,
+            "filename": filename,
+            "rel_path": relative_name,
+            "filesize": filesize,
+            "is_compressed": use_compression,
+            "is_encrypted": use_encryption,
+            "checksum": file_checksum
+        })
+
+        # Wait for server response
+        response = receive_message(sock)
+        if not response or response.get("type") != "FILE_RESPONSE":
+            return False, "No response from receiving peer."
+
+        status = response.get("status")
+        if status != "ACCEPT":
+            reason = response.get("reason", "Declined")
+            return False, f"Peer rejected transfer: {reason}"
+
+        resume_offset = response.get("resume_offset", 0)
+
+        # Stream file data through processor
+        ok, msg = processor.process_and_send_file(
+            sock=sock,
+            file_path=file_path,
+            filesize=filesize,
+            use_compression=use_compression,
+            use_encryption=use_encryption,
+            encryption_key=state.encryption_key,
+            resume_offset=resume_offset,
+            progress_callback=progress_callback
+        )
+
+        if not ok:
+            return False, msg
+
+        # Wait for final ACK
+        final_ack = receive_message(sock)
+        if final_ack and final_ack.get("status") == "SUCCESS":
+            # Record outbound transfer
+            record_transfer({
+                "id": transfer_id,
+                "filename": filename,
+                "rel_path": relative_name,
+                "filepath": file_path,
+                "total_bytes": filesize,
+                "direction": "OUTBOUND",
+                "target_ip": target_ip,
+                "status": "COMPLETED",
+                "encrypted": use_encryption,
+                "compressed": use_compression
+            })
+            return True, "File transferred and verified successfully."
+        elif final_ack and final_ack.get("status") == "FAILED":
+            return False, f"Peer error: {final_ack.get('reason', 'Unknown error')}"
+
+        return True, "File stream completed."
+    except Exception as e:
+        return False, f"Socket error: {e}"
+    finally:
+        sock.close()
+
+def send_batch(
+    target_ip: str,
+    batch: BatchTransferTask,
+    target_port: int = TCP_PORT,
+    batch_progress_callback = None
+) -> tuple[int, int]:
+    """Send all tasks in a batch sequentially."""
+    success_count = 0
+    total_count = len(batch.tasks)
+
+    for task in batch.tasks:
+        if batch.status == TransferStatus.CANCELLED:
+            break
+
+        task.status = TransferStatus.IN_PROGRESS
+        task.start_time = time.time()
+
+        def _task_progress(sent_bytes, total_bytes, metrics):
+            task.transferred_bytes = sent_bytes
+            task.speed = metrics["speed"]
+            task.eta = metrics["eta"]
+            batch.update_aggregate_metrics()
+            if batch_progress_callback:
+                batch_progress_callback(batch, task, metrics)
+
+        ok, msg = send_single_file(
+            target_ip=target_ip,
+            file_path=task.local_path,
+            rel_path=task.relative_path,
+            target_port=target_port,
+            progress_callback=_task_progress
+        )
+
+        if ok:
+            task.status = TransferStatus.COMPLETED
+            task.transferred_bytes = task.filesize
+            success_count += 1
+        else:
+            task.status = TransferStatus.FAILED
+            task.error_message = msg
+
+        task.end_time = time.time()
+        batch.update_aggregate_metrics()
+
+    return success_count, total_count
+
+# Hook queue manager task executor
+def _execute_queue_task(task: TransferTask):
+    def _cb(sent_bytes, total_bytes, metrics):
+        task.transferred_bytes = sent_bytes
+        task.speed = metrics["speed"]
+        task.eta = metrics["eta"]
+
+    ok, msg = send_single_file(
+        target_ip=task.target_ip,
+        file_path=task.local_path,
+        rel_path=task.relative_path,
+        progress_callback=_cb
+    )
+    if ok:
+        task.status = TransferStatus.COMPLETED
+        task.transferred_bytes = task.filesize
+    else:
+        task.status = TransferStatus.FAILED
+        task.error_message = msg
+
+queue_manager.set_execution_handler(_execute_queue_task)

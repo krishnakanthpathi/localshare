@@ -13,6 +13,11 @@ ENV/
 .idea/
 .DS_Store
 
+# Build and distribution
+build/
+dist/
+*.egg-info/
+
 # Frontend Node modules & logs
 frontend/node_modules/
 npm-debug.log*
