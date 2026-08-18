@@ -40,11 +40,21 @@ class UDPDiscoveryServer:
         self.running = False
 
     def get_active_peers(self, ttl=15) -> list[dict]:
-        """Return unified list of active LAN and Tailscale peers with resolved custom names."""
+        """Return unified list of active LAN and Tailscale peers that have explicitly acknowledged presence."""
         now = time.time()
         active_map = {}
 
-        # 1. LAN discovered peers
+        # Fetch Tailscale peers metadata map for enrichment (IP -> peer dict)
+        ts_map = {}
+        try:
+            for p in get_tailscale_peers():
+                ts_map[p["ip"]] = p
+                for aip in p.get("all_ips", []):
+                    ts_map[aip] = p
+        except Exception:
+            pass
+
+        # Only include peers that actively sent a packet within TTL
         with self.lock:
             for ip, peer in list(self.peers.items()):
                 if now - peer.get("last_seen", 0) <= ttl:
@@ -53,31 +63,24 @@ class UDPDiscoveryServer:
                     if custom:
                         peer_copy["name"] = custom
                         peer_copy["custom_alias"] = custom
-                    active_map[ip] = peer_copy
 
-        # 2. Tailscale online peers
-        try:
-            ts_peers = get_tailscale_peers()
-            for p in ts_peers:
-                ip = p["ip"]
-                if ip not in active_map:
-                    active_map[ip] = {
-                        "ip": ip,
-                        "name": p["name"],
-                        "port": TCP_PORT,
-                        "web_port": WEB_PORT,
-                        "type": "tailscale",
-                        "os": p.get("os", "unknown"),
-                        "last_seen": now,
-                        "latency": 0.0
-                    }
-        except Exception:
-            pass
+                    # Enrich with Tailscale metadata if applicable
+                    if ip in ts_map or ip.startswith("100."):
+                        peer_copy["type"] = "tailscale"
+                        ts_info = ts_map.get(ip, {})
+                        if ts_info:
+                            peer_copy["os"] = ts_info.get("os", peer_copy.get("os", "unknown"))
+                            if not custom and ts_info.get("name"):
+                                peer_copy["name"] = ts_info["name"]
+                    else:
+                        peer_copy.setdefault("type", "lan")
+
+                    active_map[ip] = peer_copy
 
         return list(active_map.values())
 
     def _listen_loop(self):
-        """Listen for UDP broadcast packets."""
+        """Listen for UDP broadcast and unicast packets."""
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if sys.platform != "win32":
@@ -116,7 +119,9 @@ class UDPDiscoveryServer:
                         "port": msg.get("port", TCP_PORT),
                         "web_port": msg.get("web_port", WEB_PORT),
                         "last_seen": now,
-                        "latency": round((now - msg.get("timestamp", now)) * 1000, 1) if msg.get("timestamp") else 0
+                        "latency": round((now - msg.get("timestamp", now)) * 1000, 1) if msg.get("timestamp") else 0,
+                        "type": "tailscale" if sender_ip.startswith("100.") else "lan",
+                        "acknowledged": True
                     }
                     
                     with self.lock:
@@ -129,7 +134,8 @@ class UDPDiscoveryServer:
                         "ip": self.primary_ip,
                         "port": TCP_PORT,
                         "web_port": WEB_PORT,
-                        "timestamp": msg.get("timestamp")
+                        "timestamp": msg.get("timestamp"),
+                        "ack": True
                     }).encode("utf-8")
                     
                     udp_socket.sendto(reply, addr)
@@ -146,7 +152,7 @@ class UDPDiscoveryServer:
             time.sleep(5)
 
     def broadcast_announce(self):
-        """Send broadcast announcement packet to discover peers."""
+        """Send broadcast and unicast announcement packets to discover peers."""
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
@@ -154,11 +160,13 @@ class UDPDiscoveryServer:
             "type": "ANNOUNCE",
             "name": state.device_name,
             "ip": self.primary_ip,
+            "tailscale_ip": self.net_info.get("tailscale"),
             "port": TCP_PORT,
             "web_port": WEB_PORT,
             "timestamp": time.time()
         }).encode("utf-8")
 
+        # 1. LAN broadcast targets
         targets = ["255.255.255.255"]
         for ip in self.net_info["all"]:
             parts = ip.split(".")
@@ -166,6 +174,17 @@ class UDPDiscoveryServer:
                 subnet_bc = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
                 if subnet_bc not in targets:
                     targets.append(subnet_bc)
+
+        # 2. Tailscale unicast targets
+        try:
+            ts_peers = get_tailscale_peers()
+            for p in ts_peers:
+                tip = p.get("ip")
+                if tip and tip not in self.net_info["all"] and tip != "127.0.0.1":
+                    if tip not in targets:
+                        targets.append(tip)
+        except Exception:
+            pass
 
         for target in targets:
             try:
@@ -177,11 +196,17 @@ class UDPDiscoveryServer:
 
 def discover_peers(timeout=2.0) -> list[dict]:
     """
-    Active peer scan function for CLI calls.
-    Sends DISCOVER broadcast and returns list of discovered LAN & Tailscale peers.
+    Active peer scan function for CLI calls and REST API.
+    Sends DISCOVER packet to LAN broadcasts and unicast to Tailscale IPs.
+    Returns ONLY peers that explicitly respond with an acknowledgment.
     """
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    # Bind to ephemeral port (0) to prevent port collisions with any running daemon
+    try:
+        udp_socket.bind(("0.0.0.0", 0))
+    except Exception:
+        pass
     udp_socket.settimeout(timeout)
 
     net_info = get_network_interfaces()
@@ -191,14 +216,33 @@ def discover_peers(timeout=2.0) -> list[dict]:
         "type": "DISCOVER",
         "name": state.device_name,
         "ip": net_info["primary"],
+        "tailscale_ip": net_info.get("tailscale"),
+        "port": TCP_PORT,
+        "web_port": WEB_PORT,
         "timestamp": time.time()
     }).encode("utf-8")
 
+    # 1. LAN broadcast targets
     targets = ["255.255.255.255"]
     for ip in net_info["all"]:
         parts = ip.split(".")
         if len(parts) == 4 and not ip.startswith("127."):
             targets.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+
+    # 2. Tailscale unicast targets
+    ts_map = {}
+    try:
+        ts_peers = get_tailscale_peers()
+        for p in ts_peers:
+            tip = p.get("ip")
+            if tip:
+                ts_map[tip] = p
+                for aip in p.get("all_ips", []):
+                    ts_map[aip] = p
+                if tip not in my_ips and tip != "127.0.0.1":
+                    targets.append(tip)
+    except Exception:
+        pass
 
     for target in targets:
         try:
@@ -210,6 +254,10 @@ def discover_peers(timeout=2.0) -> list[dict]:
     peers = {}
 
     while time.time() - start_time < timeout:
+        remaining = timeout - (time.time() - start_time)
+        if remaining <= 0:
+            break
+        udp_socket.settimeout(remaining)
         try:
             data, addr = udp_socket.recvfrom(2048)
             msg = json.loads(data.decode("utf-8", errors="ignore"))
@@ -217,13 +265,19 @@ def discover_peers(timeout=2.0) -> list[dict]:
 
             if sender_ip not in my_ips and sender_ip != "127.0.0.1":
                 custom = get_peer_alias(sender_ip)
+                is_ts = sender_ip.startswith("100.") or sender_ip in ts_map
+                ts_info = ts_map.get(sender_ip, {})
+                resolved_name = custom or (ts_info.get("name") if is_ts and ts_info else None) or msg.get("name", sender_ip)
+
                 peers[sender_ip] = {
                     "ip": sender_ip,
-                    "name": custom or msg.get("name", sender_ip),
+                    "name": resolved_name,
                     "port": msg.get("port", TCP_PORT),
                     "web_port": msg.get("web_port", WEB_PORT),
                     "latency": round((time.time() - msg.get("timestamp", time.time())) * 1000, 1),
-                    "type": "lan"
+                    "type": "tailscale" if is_ts else "lan",
+                    "os": ts_info.get("os", "unknown") if is_ts else "unknown",
+                    "acknowledged": True
                 }
         except socket.timeout:
             break
@@ -231,23 +285,5 @@ def discover_peers(timeout=2.0) -> list[dict]:
             continue
 
     udp_socket.close()
-
-    # Merge Tailscale peers
-    try:
-        ts_peers = get_tailscale_peers()
-        for p in ts_peers:
-            ip = p["ip"]
-            if ip not in peers:
-                peers[ip] = {
-                    "ip": ip,
-                    "name": p["name"],
-                    "port": TCP_PORT,
-                    "web_port": WEB_PORT,
-                    "latency": 0.0,
-                    "type": "tailscale",
-                    "os": p.get("os", "unknown")
-                }
-    except Exception:
-        pass
 
     return list(peers.values())

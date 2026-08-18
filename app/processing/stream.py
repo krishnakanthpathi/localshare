@@ -30,11 +30,11 @@ class SocketWriteStream:
     def flush(self):
         pass
 
-def read_exact_bytes(sock, n_bytes: int) -> bytes | None:
-    """Read exactly n_bytes from socket stream."""
+def read_exact_bytes(sock, num_bytes: int) -> bytes | None:
+    """Read exactly num_bytes from socket stream."""
     buffer = bytearray()
-    while len(buffer) < n_bytes:
-        chunk = sock.recv(n_bytes - len(buffer))
+    while len(buffer) < num_bytes:
+        chunk = sock.recv(num_bytes - len(buffer))
         if not chunk:
             return None
         buffer.extend(chunk)

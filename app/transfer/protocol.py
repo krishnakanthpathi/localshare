@@ -32,7 +32,8 @@ def receive_message(sock) -> dict | None:
         payload_bytes = read_exact_bytes(sock, length)
         if not payload_bytes:
             return None
-            
+        # {"cmd": "HELLO"}
+        # }{"cmd": "BYE"} 
         return json.loads(payload_bytes.decode("utf-8"))
     except Exception:
         return None

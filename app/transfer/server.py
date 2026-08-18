@@ -8,7 +8,7 @@ import threading
 import os
 import time
 import uuid
-from app.config import TCP_PORT, state
+from app.config import TCP_PORT, WEB_PORT, state
 from app.utils import safe_join, is_suspicious_file
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
@@ -97,7 +97,17 @@ class TCPServer:
 
             msg_type = msg.get("type")
 
-            if msg_type == "TEXT_SNIPPET":
+            if msg_type == "PING":
+                send_message(sock, {
+                    "type": "PONG",
+                    "name": state.device_name,
+                    "port": self.port,
+                    "web_port": WEB_PORT,
+                    "timestamp": msg.get("timestamp"),
+                    "ack": True
+                })
+                sock.close()
+            elif msg_type == "TEXT_SNIPPET":
                 self._handle_text_snippet(msg, sender_ip)
                 sock.close()
             elif msg_type == "FILE_HEADER":
