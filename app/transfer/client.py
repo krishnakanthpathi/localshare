@@ -90,6 +90,7 @@ def send_single_file(
         "compressed": use_compression,
         "speed": 0.0,
         "speed_mb": 0.0,
+        "speed_mbps": 0.0,
         "eta": 0.0,
         "start_time": time.time(),
         "end_time": 0.0
@@ -102,6 +103,7 @@ def send_single_file(
         transfer_record["progress_percent"] = metrics.get("percent", 0.0)
         transfer_record["speed"] = metrics.get("speed", 0.0)
         transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+        transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
         transfer_record["eta"] = metrics.get("eta", 0.0)
         if progress_callback:
             progress_callback(sent_bytes, total_bytes, metrics)
@@ -162,6 +164,8 @@ def send_single_file(
             transfer_record["received_bytes"] = filesize
             transfer_record["progress_percent"] = 100.0
             transfer_record["speed"] = 0.0
+            transfer_record["speed_mb"] = 0.0
+            transfer_record["speed_mbps"] = 0.0
             transfer_record["eta"] = 0.0
             transfer_record["end_time"] = time.time()
             

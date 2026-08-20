@@ -6,10 +6,11 @@ Accepts incoming file transfers and text snippets with on-the-fly decryption and
 import socket
 import threading
 import os
+import sys
 import time
 import uuid
 from app.config import TCP_PORT, WEB_PORT, state
-from app.utils import safe_join, is_suspicious_file
+from app.utils import safe_join, is_suspicious_file, format_bytes
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
 from app.security.encryption import decrypt_text
@@ -252,20 +253,41 @@ class TCPServer:
             "end_time": 0.0,
             "speed": 0.0,
             "speed_mb": 0.0,
+            "speed_mbps": 0.0,
             "eta": 0.0
         }
         state.transfers.insert(0, transfer_record)
 
-        print(f"📥 Receiving '{rel_path}' ({filesize} bytes) from {sender_ip} "
+        formatted_size = format_bytes(filesize)
+        print(f"\n📥 [INCOMING] Receiving '{rel_path}' ({formatted_size}) from {sender_ip} "
               f"[Gzip: {is_compressed}, AES: {is_encrypted}]...")
+
+        last_progress_print = [0.0]
 
         def _progress(received_bytes, total_bytes, metrics):
             transfer_record["received_bytes"] = received_bytes
             transfer_record["transferred_bytes"] = received_bytes
             transfer_record["speed"] = metrics.get("speed", 0.0)
             transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+            transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
             transfer_record["eta"] = metrics.get("eta", 0.0)
             transfer_record["progress_percent"] = metrics.get("percent", 0.0)
+
+            # Live CLI output on receiver console
+            now = time.time()
+            if now - last_progress_print[0] >= 0.15 or received_bytes >= total_bytes:
+                last_progress_print[0] = now
+                pct = metrics.get("percent", 0.0)
+                speed_mb = metrics.get("speed_mb", 0.0)
+                speed_mbps = metrics.get("speed_mbps", 0.0)
+                eta = metrics.get("eta", 0.0)
+                eta_str = f"{eta:.1f}s" if eta > 0 else "0.0s"
+                display_name = filename if len(filename) <= 18 else filename[:15] + "..."
+                sys.stdout.write(
+                    f"\r   📥 [Recv] {pct:5.1f}% | [{display_name:<18}] | "
+                    f"Speed: {speed_mb:6.2f} MB/s ({speed_mbps:5.1f} Mbps) | ETA: {eta_str:<8}"
+                )
+                sys.stdout.flush()
 
         ok, msg, total_rec = processor.receive_and_save_file(
             sock=sock,
@@ -279,15 +301,23 @@ class TCPServer:
             progress_callback=_progress
         )
 
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
         if ok:
             transfer_record["status"] = "COMPLETED"
             transfer_record["received_bytes"] = total_rec
             transfer_record["transferred_bytes"] = total_rec
             transfer_record["progress_percent"] = 100.0
             transfer_record["speed"] = 0.0
+            transfer_record["speed_mb"] = 0.0
+            transfer_record["speed_mbps"] = 0.0
             transfer_record["eta"] = 0.0
             transfer_record["end_time"] = time.time()
-            print(f"✅ Received successfully: {target_path}")
+            elapsed_total = max(transfer_record["end_time"] - transfer_record["start_time"], 0.001)
+            avg_speed_mb = (total_rec / elapsed_total) / (1024 * 1024)
+            avg_speed_mbps = ((total_rec * 8) / elapsed_total) / (1024 * 1024)
+            print(f"✅ Received successfully: {target_path} ({format_bytes(total_rec)} in {elapsed_total:.1f}s @ {avg_speed_mb:.2f} MB/s [{avg_speed_mbps:.1f} Mbps])\n")
             send_message(sock, {
                 "type": "TRANSFER_COMPLETE",
                 "transfer_id": transfer_id,
@@ -300,9 +330,11 @@ class TCPServer:
             transfer_record["status"] = "FAILED"
             transfer_record["error_message"] = msg
             transfer_record["speed"] = 0.0
+            transfer_record["speed_mb"] = 0.0
+            transfer_record["speed_mbps"] = 0.0
             transfer_record["eta"] = 0.0
             transfer_record["end_time"] = time.time()
-            print(f"❌ Transfer error for '{filename}': {msg}")
+            print(f"❌ Transfer error for '{filename}': {msg}\n")
             send_message(sock, {
                 "type": "TRANSFER_COMPLETE",
                 "transfer_id": transfer_id,

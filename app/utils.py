@@ -191,3 +191,14 @@ def generate_qr_code_svg(data_url):
             <rect width="240" height="240" fill="#ffffff"/>
             <text x="120" y="120" font-family="sans-serif" font-size="12" fill="#000000" text-anchor="middle">{data_url}</text>
         </svg>'''
+
+def format_bytes(size_bytes: int) -> str:
+    """Format bytes into human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"

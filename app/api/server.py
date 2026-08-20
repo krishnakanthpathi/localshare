@@ -46,7 +46,8 @@ def start_web_server(port: int = WEB_PORT, open_browser: bool = False) -> tuple[
             
             config = uvicorn.Config(
                 app=fastapi_app,
-                log_level="warning"
+                log_level="error",
+                access_log=False
             )
             server = uvicorn.Server(config)
             

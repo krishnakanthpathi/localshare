@@ -26,6 +26,8 @@ class TransferProcessor:
         elapsed = max(time.time() - start_time, 0.001)
         net_transferred = max(transferred_bytes - offset_bytes, 0)
         speed = net_transferred / elapsed
+        speed_mb = speed / (1024 * 1024)
+        speed_mbps = (speed * 8) / (1024 * 1024)
         
         remaining_bytes = max(total_bytes - transferred_bytes, 0)
         eta = remaining_bytes / speed if speed > 0 else 0
@@ -33,7 +35,8 @@ class TransferProcessor:
         
         return {
             "speed": speed,
-            "speed_mb": speed / (1024 * 1024),
+            "speed_mb": round(speed_mb, 2),
+            "speed_mbps": round(speed_mbps, 2),
             "eta": round(eta, 1),
             "percent": round(percent, 1),
             "elapsed": round(elapsed, 1)

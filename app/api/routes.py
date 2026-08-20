@@ -42,11 +42,11 @@ async def sse_events(request: Request):
                 break
             payload = {
                 "timestamp": time.time(),
-                "transfers": state.transfers,
+                "transfers": list(state.transfers),
                 "batches": queue_manager.get_all_batches()
             }
             yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -309,6 +309,7 @@ async def upload_files(
                 "compressed": False,
                 "speed": 0.0,
                 "speed_mb": 0.0,
+                "speed_mbps": 0.0,
                 "eta": 0.0,
                 "start_time": start_t,
                 "end_time": 0.0
@@ -327,6 +328,8 @@ async def upload_files(
 
                         elapsed = max(time.time() - start_t, 0.001)
                         speed = received_bytes / elapsed
+                        speed_mb = speed / (1024 * 1024)
+                        speed_mbps = (speed * 8) / (1024 * 1024)
                         total_for_pct = file_size if file_size >= received_bytes else received_bytes
                         pct = (received_bytes / total_for_pct * 100) if total_for_pct > 0 else 100.0
                         remaining = max(total_for_pct - received_bytes, 0)
@@ -337,12 +340,15 @@ async def upload_files(
                         transfer_rec["total_bytes"] = max(file_size, received_bytes)
                         transfer_rec["progress_percent"] = round(min(pct, 100.0), 1)
                         transfer_rec["speed"] = round(speed, 2)
-                        transfer_rec["speed_mb"] = round(speed / (1024 * 1024), 2)
+                        transfer_rec["speed_mb"] = round(speed_mb, 2)
+                        transfer_rec["speed_mbps"] = round(speed_mbps, 2)
                         transfer_rec["eta"] = round(eta, 1)
 
                 transfer_rec["status"] = "COMPLETED"
                 transfer_rec["progress_percent"] = 100.0
                 transfer_rec["speed"] = 0.0
+                transfer_rec["speed_mb"] = 0.0
+                transfer_rec["speed_mbps"] = 0.0
                 transfer_rec["eta"] = 0.0
                 transfer_rec["end_time"] = time.time()
                 record_transfer(transfer_rec)
