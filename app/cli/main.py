@@ -187,6 +187,13 @@ def manage_peer_aliases():
 def interactive_send_flow(udp_server: UDPDiscoveryServer):
     """Interactive multi-folder & file batch transmission flow."""
     peers = udp_server.get_active_peers()
+    if not peers:
+        discovered = discover_peers(timeout=1.0)
+        for p in discovered:
+            with udp_server.lock:
+                udp_server.peers[p["ip"]] = p
+        peers = udp_server.get_active_peers()
+
     print("\nSelect target peer:")
     if not peers:
         print("   No active peers discovered via beacon.")
@@ -294,6 +301,10 @@ def run_interactive_cli():
 
             if cmd in ("1", "scan", "ls", "peers"):
                 print("\n📡 Discovering mesh peers across LAN & Tailscale...")
+                discovered = discover_peers(timeout=1.5)
+                for p in discovered:
+                    with udp_server.lock:
+                        udp_server.peers[p["ip"]] = p
                 peers = udp_server.get_active_peers()
                 if not peers:
                     print("   No active peers found. Make sure other LocalShare devices are online.")

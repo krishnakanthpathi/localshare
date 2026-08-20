@@ -9,18 +9,25 @@ from pymongo.errors import PyMongoError, ServerSelectionTimeoutError
 from app.config import state, DEFAULT_MONGO_URI, DEFAULT_MONGO_DB, DEFAULT_UPLOAD_DIR
 
 _client = None
+_last_fail_time = 0
+_FAIL_COOLDOWN = 15.0
 
 def get_client(uri=None):
-    """Get or create singleton PyMongo client."""
-    global _client
+    """Get or create singleton PyMongo client with connection throttling."""
+    global _client, _last_fail_time
     target_uri = uri or state.mongo_uri or DEFAULT_MONGO_URI
+    now = time.time()
+    
     if _client is None:
+        if now - _last_fail_time < _FAIL_COOLDOWN:
+            return None
         try:
-            _client = pymongo.MongoClient(target_uri, serverSelectionTimeoutMS=2000)
-            # Trigger quick ping
-            _client.admin.command("ping")
+            client = pymongo.MongoClient(target_uri, serverSelectionTimeoutMS=1000)
+            client.admin.command("ping")
+            _client = client
             state.mongo_connected = True
         except Exception:
+            _last_fail_time = now
             state.mongo_connected = False
             return None
     return _client
@@ -38,7 +45,6 @@ def is_connected():
     try:
         client = get_client()
         if client:
-            client.admin.command("ping")
             state.mongo_connected = True
             return True
     except Exception:

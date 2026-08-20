@@ -51,16 +51,6 @@ def test_send_udp_discovery_to_tailscale_peers(timeout=3.0):
         sock.close()
         return []
 
-    packet = json.dumps({
-        "type": "DISCOVER",
-        "name": state.device_name,
-        "ip": my_primary,
-        "tailscale_ip": my_ts_ip,
-        "port": TCP_PORT,
-        "web_port": WEB_PORT,
-        "timestamp": time.time()
-    }).encode("utf-8")
-
     print("\n📤 Sending unicast UDP DISCOVER packets directly to Tailscale IPs...")
     sent_targets = []
     for peer in ts_peers:
@@ -68,6 +58,15 @@ def test_send_udp_discovery_to_tailscale_peers(timeout=3.0):
         if target_ip in my_ips or target_ip == my_ts_ip:
             continue
         try:
+            packet = json.dumps({
+                "type": "DISCOVER",
+                "name": state.device_name,
+                "ip": my_primary,
+                "tailscale_ip": my_ts_ip,
+                "port": TCP_PORT,
+                "web_port": WEB_PORT,
+                "timestamp": time.time()
+            }).encode("utf-8")
             sock.sendto(packet, (target_ip, UDP_PORT))
             print(f"   ➡️ Packet sent to {peer['name']} ({target_ip}:{UDP_PORT}) [{len(packet)} bytes]")
             sent_targets.append((target_ip, peer['name']))

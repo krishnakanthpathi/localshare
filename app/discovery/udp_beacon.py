@@ -113,13 +113,23 @@ class UDPDiscoveryServer:
                 now = time.time()
                 if msg_type in ("DISCOVER", "ANNOUNCE", "RESPONSE"):
                     custom_name = get_peer_alias(sender_ip)
+                    prev_peer = self.peers.get(sender_ip, {})
+                    
+                    # For RESPONSE packets, msg["timestamp"] is the echo of our own local timestamp,
+                    # so (now - msg["timestamp"]) is the true RTT measured on this machine's clock.
+                    # For ANNOUNCE packets, msg["timestamp"] is from the remote clock, so we avoid clock skew.
+                    if msg_type == "RESPONSE" and msg.get("ack") and isinstance(msg.get("timestamp"), (int, float)):
+                        latency = max(round((now - msg["timestamp"]) * 1000, 1), 0.1)
+                    else:
+                        latency = prev_peer.get("latency", 0.5)
+
                     peer_info = {
                         "ip": sender_ip,
                         "name": custom_name or msg.get("name", sender_ip),
                         "port": msg.get("port", TCP_PORT),
                         "web_port": msg.get("web_port", WEB_PORT),
                         "last_seen": now,
-                        "latency": max(round((now - msg.get("timestamp", now)) * 1000, 1), 0.5) if msg.get("timestamp") else 0,
+                        "latency": latency,
                         "type": "tailscale" if sender_ip.startswith("100.") else "lan",
                         "acknowledged": True
                     }
@@ -156,16 +166,6 @@ class UDPDiscoveryServer:
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-        packet = json.dumps({
-            "type": "ANNOUNCE",
-            "name": state.device_name,
-            "ip": self.primary_ip,
-            "tailscale_ip": self.net_info.get("tailscale"),
-            "port": TCP_PORT,
-            "web_port": WEB_PORT,
-            "timestamp": time.time()
-        }).encode("utf-8")
-
         # 1. LAN broadcast targets
         targets = ["255.255.255.255"]
         for ip in self.net_info["all"]:
@@ -185,6 +185,16 @@ class UDPDiscoveryServer:
                         targets.append(tip)
         except Exception:
             pass
+
+        packet = json.dumps({
+            "type": "ANNOUNCE",
+            "name": state.device_name,
+            "ip": self.primary_ip,
+            "tailscale_ip": self.net_info.get("tailscale"),
+            "port": TCP_PORT,
+            "web_port": WEB_PORT,
+            "timestamp": time.time()
+        }).encode("utf-8")
 
         for target in targets:
             try:
@@ -212,16 +222,6 @@ def discover_peers(timeout=2.0) -> list[dict]:
     net_info = get_network_interfaces()
     my_ips = set(net_info["all"])
 
-    packet = json.dumps({
-        "type": "DISCOVER",
-        "name": state.device_name,
-        "ip": net_info["primary"],
-        "tailscale_ip": net_info.get("tailscale"),
-        "port": TCP_PORT,
-        "web_port": WEB_PORT,
-        "timestamp": time.time()
-    }).encode("utf-8")
-
     # 1. LAN broadcast targets
     targets = ["255.255.255.255"]
     for ip in net_info["all"]:
@@ -244,13 +244,23 @@ def discover_peers(timeout=2.0) -> list[dict]:
     except Exception:
         pass
 
+    start_time = time.time()
+    packet = json.dumps({
+        "type": "DISCOVER",
+        "name": state.device_name,
+        "ip": net_info["primary"],
+        "tailscale_ip": net_info.get("tailscale"),
+        "port": TCP_PORT,
+        "web_port": WEB_PORT,
+        "timestamp": start_time
+    }).encode("utf-8")
+
     for target in targets:
         try:
             udp_socket.sendto(packet, (target, UDP_PORT))
         except Exception:
             pass
 
-    start_time = time.time()
     peers = {}
 
     while time.time() - start_time < timeout:
@@ -269,7 +279,12 @@ def discover_peers(timeout=2.0) -> list[dict]:
                 ts_info = ts_map.get(sender_ip, {})
                 resolved_name = custom or (ts_info.get("name") if is_ts and ts_info else None) or msg.get("name", sender_ip)
 
-                rtt = max(round((time.time() - start_time) * 1000, 1), 0.1)
+                msg_type = msg.get("type")
+                echoed_ts = msg.get("timestamp")
+                if msg_type == "RESPONSE" and msg.get("ack") and isinstance(echoed_ts, (int, float)):
+                    rtt = max(round((time.time() - echoed_ts) * 1000, 1), 0.1)
+                else:
+                    rtt = max(round((time.time() - start_time) * 1000, 1), 0.1)
                 peers[sender_ip] = {
                     "ip": sender_ip,
                     "name": resolved_name,
