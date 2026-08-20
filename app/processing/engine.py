@@ -60,6 +60,16 @@ class TransferProcessor:
         sent_raw_bytes = resume_offset
         compressor = zlib.compressobj(state.compression_level, zlib.DEFLATED, zlib.MAX_WBITS | 16) if use_compression else None
         
+        # Handle 0-byte file edge case
+        if filesize == 0:
+            if progress_callback:
+                metrics = self.calculate_metrics(0, 0, start_time, resume_offset)
+                progress_callback(0, 0, metrics)
+            if use_encryption or use_compression:
+                end_marker = struct.pack(CHUNK_HEADER_FORMAT, 0)
+                sock.sendall(end_marker)
+            return True, "Empty file stream dispatched successfully."
+
         try:
             with open(file_path, "rb") as f:
                 if resume_offset > 0:
@@ -113,6 +123,10 @@ class TransferProcessor:
                     end_marker = struct.pack(CHUNK_HEADER_FORMAT, 0)
                     sock.sendall(end_marker)
 
+            if progress_callback and sent_raw_bytes >= filesize:
+                metrics = self.calculate_metrics(filesize, filesize, start_time, resume_offset)
+                progress_callback(filesize, filesize, metrics)
+
             return True, "File stream dispatched successfully."
         except Exception as e:
             return False, f"Stream processing error: {e}"
@@ -138,6 +152,15 @@ class TransferProcessor:
         received_raw_bytes = resume_offset
         hasher = hashlib.md5()
         decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16) if is_compressed else None
+
+        # Handle 0-byte file edge case
+        if filesize == 0:
+            with open(target_path, mode) as f:
+                pass
+            if progress_callback:
+                metrics = self.calculate_metrics(0, 0, start_time, resume_offset)
+                progress_callback(0, 0, metrics)
+            return True, "Empty file received successfully.", 0
 
         try:
             with open(target_path, mode) as f:
@@ -181,6 +204,14 @@ class TransferProcessor:
                         if progress_callback:
                             metrics = self.calculate_metrics(received_raw_bytes, filesize, start_time, resume_offset)
                             progress_callback(received_raw_bytes, filesize, metrics)
+
+                    # Flush decompressor if needed
+                    if is_compressed and decompressor:
+                        final_decomp = decompressor.flush()
+                        if final_decomp:
+                            f.write(final_decomp)
+                            hasher.update(final_decomp)
+                            received_raw_bytes += len(final_decomp)
                 else:
                     # Raw socket stream mode
                     while received_raw_bytes < filesize:
@@ -195,6 +226,10 @@ class TransferProcessor:
                         if progress_callback:
                             metrics = self.calculate_metrics(received_raw_bytes, filesize, start_time, resume_offset)
                             progress_callback(received_raw_bytes, filesize, metrics)
+
+            if progress_callback:
+                metrics = self.calculate_metrics(received_raw_bytes, filesize, start_time, resume_offset)
+                progress_callback(received_raw_bytes, filesize, metrics)
 
             # Integrity verification
             if expected_checksum and received_raw_bytes == filesize and resume_offset == 0:

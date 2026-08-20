@@ -141,7 +141,9 @@ class BatchTransferTask:
     def progress_percent(self) -> float:
         if self.total_bytes <= 0:
             return 100.0 if self.status == TransferStatus.COMPLETED else 0.0
-        return min(round((self.transferred_bytes / self.total_bytes) * 100, 1), 100.0)
+        total_transferred = sum(t.transferred_bytes for t in self.tasks)
+        self.transferred_bytes = total_transferred
+        return min(round((total_transferred / self.total_bytes) * 100, 1), 100.0)
 
     def to_dict(self) -> dict:
         self.update_aggregate_metrics()

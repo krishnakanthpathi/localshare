@@ -241,12 +241,18 @@ class TCPServer:
             "filepath": target_path,
             "total_bytes": filesize,
             "received_bytes": resume_offset,
+            "transferred_bytes": resume_offset,
+            "progress_percent": round((resume_offset / filesize * 100), 1) if filesize > 0 else 0.0,
+            "direction": "INBOUND",
             "sender_ip": sender_ip,
             "status": "IN_PROGRESS",
             "encrypted": is_encrypted,
             "compressed": is_compressed,
             "start_time": time.time(),
-            "speed": 0
+            "end_time": 0.0,
+            "speed": 0.0,
+            "speed_mb": 0.0,
+            "eta": 0.0
         }
         state.transfers.insert(0, transfer_record)
 
@@ -255,7 +261,11 @@ class TCPServer:
 
         def _progress(received_bytes, total_bytes, metrics):
             transfer_record["received_bytes"] = received_bytes
-            transfer_record["speed"] = metrics["speed"]
+            transfer_record["transferred_bytes"] = received_bytes
+            transfer_record["speed"] = metrics.get("speed", 0.0)
+            transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+            transfer_record["eta"] = metrics.get("eta", 0.0)
+            transfer_record["progress_percent"] = metrics.get("percent", 0.0)
 
         ok, msg, total_rec = processor.receive_and_save_file(
             sock=sock,
@@ -272,6 +282,11 @@ class TCPServer:
         if ok:
             transfer_record["status"] = "COMPLETED"
             transfer_record["received_bytes"] = total_rec
+            transfer_record["transferred_bytes"] = total_rec
+            transfer_record["progress_percent"] = 100.0
+            transfer_record["speed"] = 0.0
+            transfer_record["eta"] = 0.0
+            transfer_record["end_time"] = time.time()
             print(f"✅ Received successfully: {target_path}")
             send_message(sock, {
                 "type": "TRANSFER_COMPLETE",
@@ -283,6 +298,10 @@ class TCPServer:
             record_transfer(transfer_record)
         else:
             transfer_record["status"] = "FAILED"
+            transfer_record["error_message"] = msg
+            transfer_record["speed"] = 0.0
+            transfer_record["eta"] = 0.0
+            transfer_record["end_time"] = time.time()
             print(f"❌ Transfer error for '{filename}': {msg}")
             send_message(sock, {
                 "type": "TRANSFER_COMPLETE",

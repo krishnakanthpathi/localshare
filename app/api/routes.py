@@ -5,18 +5,21 @@ Settings panel, multi-folder queueing, real-time Tailscale/LAN peers, transfers,
 
 import os
 import time
+import uuid
+import json
+import asyncio
 import urllib.parse
 import threading
 import shutil
 import tempfile
 from fastapi import APIRouter, Request, UploadFile, File, Form, Response, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from app.config import state, WEB_PORT
 from app.utils import get_network_interfaces, generate_qr_code_svg, safe_join
 from app.db.mongo import (
     load_settings, save_settings, get_settings_dict,
     get_peer_alias, set_peer_alias, delete_peer_alias, get_all_peer_aliases,
-    get_transfer_history, clear_transfer_history,
+    get_transfer_history, clear_transfer_history, record_transfer,
     save_clipboard_item, get_clipboard_history
 )
 from app.security.encryption import generate_key
@@ -26,6 +29,26 @@ from app.queue.manager import queue_manager
 from app.sync.clipboard import get_system_clipboard, set_system_clipboard, broadcast_text
 
 api_router = APIRouter(prefix="/api")
+
+# -----------------------------------------------------------------------------
+# Real-Time Event Stream (SSE)
+# -----------------------------------------------------------------------------
+@api_router.get("/events")
+async def sse_events(request: Request):
+    """Server-Sent Events (SSE) stream for real-time transfer progress and peer discovery."""
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+            payload = {
+                "timestamp": time.time(),
+                "transfers": state.transfers,
+                "batches": queue_manager.get_all_batches()
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # -----------------------------------------------------------------------------
 # Settings Panel Endpoints
@@ -253,7 +276,7 @@ async def upload_files(
 ):
     files_saved = []
     os.makedirs(state.upload_dir, exist_ok=True)
-    sender_ip = request.client.host if request else "127.0.0.1"
+    sender_ip = request.client.host if request and request.client else "127.0.0.1"
 
     for uploaded_file in file:
         if uploaded_file.filename:
@@ -261,13 +284,74 @@ async def upload_files(
             save_path = safe_join(state.upload_dir, rel_name)
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-            with open(save_path, "wb") as f:
-                while True:
-                    chunk = await uploaded_file.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            files_saved.append(rel_name)
+            t_id = transfer_id or str(uuid.uuid4())
+            file_size = getattr(uploaded_file, "size", None)
+            if file_size is None and request:
+                content_len = request.headers.get("content-length")
+                if content_len and content_len.isdigit():
+                    file_size = int(content_len)
+            file_size = file_size or 0
+
+            start_t = time.time()
+            transfer_rec = {
+                "id": t_id,
+                "filename": uploaded_file.filename,
+                "rel_path": rel_name,
+                "filepath": save_path,
+                "total_bytes": file_size,
+                "received_bytes": 0,
+                "transferred_bytes": 0,
+                "progress_percent": 0.0,
+                "direction": "INBOUND",
+                "sender_ip": sender_ip,
+                "status": "IN_PROGRESS",
+                "encrypted": False,
+                "compressed": False,
+                "speed": 0.0,
+                "speed_mb": 0.0,
+                "eta": 0.0,
+                "start_time": start_t,
+                "end_time": 0.0
+            }
+            state.transfers.insert(0, transfer_rec)
+
+            try:
+                received_bytes = 0
+                with open(save_path, "wb") as f:
+                    while True:
+                        chunk = await uploaded_file.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received_bytes += len(chunk)
+
+                        elapsed = max(time.time() - start_t, 0.001)
+                        speed = received_bytes / elapsed
+                        total_for_pct = file_size if file_size >= received_bytes else received_bytes
+                        pct = (received_bytes / total_for_pct * 100) if total_for_pct > 0 else 100.0
+                        remaining = max(total_for_pct - received_bytes, 0)
+                        eta = (remaining / speed) if speed > 0 else 0.0
+
+                        transfer_rec["received_bytes"] = received_bytes
+                        transfer_rec["transferred_bytes"] = received_bytes
+                        transfer_rec["total_bytes"] = max(file_size, received_bytes)
+                        transfer_rec["progress_percent"] = round(min(pct, 100.0), 1)
+                        transfer_rec["speed"] = round(speed, 2)
+                        transfer_rec["speed_mb"] = round(speed / (1024 * 1024), 2)
+                        transfer_rec["eta"] = round(eta, 1)
+
+                transfer_rec["status"] = "COMPLETED"
+                transfer_rec["progress_percent"] = 100.0
+                transfer_rec["speed"] = 0.0
+                transfer_rec["eta"] = 0.0
+                transfer_rec["end_time"] = time.time()
+                record_transfer(transfer_rec)
+                files_saved.append(rel_name)
+            except Exception as e:
+                transfer_rec["status"] = "FAILED"
+                transfer_rec["error_message"] = str(e)
+                transfer_rec["end_time"] = time.time()
+                raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
     return {"status": "success", "files": files_saved}
 

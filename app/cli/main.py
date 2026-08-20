@@ -214,7 +214,6 @@ def interactive_send_flow(udp_server: UDPDiscoveryServer):
     # Parse comma-separated or single paths
     path_list = [p.strip().strip('"').strip("'") for p in raw_paths.split(",") if p.strip()]
     valid_paths = [p for p in path_list if os.path.exists(p)]
-
     if not valid_paths:
         print("❌ None of the specified paths exist.")
         return
@@ -230,6 +229,7 @@ def interactive_send_flow(udp_server: UDPDiscoveryServer):
     print("🚀 Transmitting batch...")
     last_file = ""
     while batch.status in (TransferStatus.QUEUED, TransferStatus.IN_PROGRESS):
+        batch.update_aggregate_metrics()
         active_task = next((t for t in batch.tasks if t.status == TransferStatus.IN_PROGRESS), None)
         if active_task and active_task.filename != last_file:
             last_file = active_task.filename
@@ -237,11 +237,11 @@ def interactive_send_flow(udp_server: UDPDiscoveryServer):
         pct = batch.progress_percent
         speed_mb = batch.speed / (1024 * 1024)
         eta_str = f"{batch.eta:.1f}s" if batch.eta > 0 else "calculating"
-        cur_file_str = f"[{active_task.filename[:20]}]" if active_task else "Preparing"
+        cur_file_str = f"[{active_task.filename[:14]} {active_task.progress_percent:.0f}%]" if active_task else "[Preparing]"
 
         sys.stdout.write(f"\r   Progress: {pct:5.1f}% | {cur_file_str:<22} | Speed: {speed_mb:6.2f} MB/s | ETA: {eta_str:<10}")
         sys.stdout.flush()
-        time.sleep(0.2)
+        time.sleep(0.15)
 
     sys.stdout.write("\n")
     if batch.status == TransferStatus.COMPLETED:
@@ -444,7 +444,16 @@ def run_cli():
         batch = queue_manager.enqueue_paths(target_ip=args.target, paths=args.paths)
         print(f"Batch {batch.id} started with {len(batch.tasks)} files ({format_bytes(batch.total_bytes)}).")
         while batch.status in (TransferStatus.QUEUED, TransferStatus.IN_PROGRESS):
-            time.sleep(0.5)
+            batch.update_aggregate_metrics()
+            active_task = next((t for t in batch.tasks if t.status == TransferStatus.IN_PROGRESS), None)
+            pct = batch.progress_percent
+            speed_mb = batch.speed / (1024 * 1024)
+            eta_str = f"{batch.eta:.1f}s" if batch.eta > 0 else "calculating"
+            cur_file_str = f"[{active_task.filename[:14]} {active_task.progress_percent:.0f}%]" if active_task else "[Preparing]"
+            sys.stdout.write(f"\r   Progress: {pct:5.1f}% | {cur_file_str:<22} | Speed: {speed_mb:6.2f} MB/s | ETA: {eta_str:<10}")
+            sys.stdout.flush()
+            time.sleep(0.15)
+        sys.stdout.write("\n")
         print(f"Status: {batch.status.value}")
 
     elif args.subcommand == "text":
