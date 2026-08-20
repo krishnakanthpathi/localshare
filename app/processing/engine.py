@@ -8,6 +8,7 @@ import time
 import zlib
 import struct
 import hashlib
+import collections
 from app.config import BUFFER_SIZE, state
 from app.security.encryption import encrypt_chunk, decrypt_chunk
 from app.processing.stream import read_exact_bytes
@@ -19,28 +20,64 @@ class TransferProcessor:
     """Core processor object for orchestrating streaming data transformation."""
 
     def __init__(self):
-        pass
+        self._speed_windows = collections.defaultdict(collections.deque)
 
-    def calculate_metrics(self, transferred_bytes: int, total_bytes: int, start_time: float, offset_bytes: int = 0):
-        """Calculate transfer speed (B/s), ETA (seconds), and completion percentage."""
-        elapsed = max(time.time() - start_time, 0.001)
+    def calculate_metrics(
+        self,
+        transferred_bytes: int,
+        total_bytes: int,
+        start_time: float,
+        offset_bytes: int = 0,
+        transfer_id: str = "default",
+        window_duration: float = 1.5
+    ):
+        """
+        Calculate instantaneous speed (B/s over 1.5s rolling window), ETA, and completion percentage.
+        """
+        now = time.time()
+        elapsed = max(now - start_time, 0.001)
         net_transferred = max(transferred_bytes - offset_bytes, 0)
-        speed = net_transferred / elapsed
+        overall_avg_speed = net_transferred / elapsed
+
+        # Maintain 1.5-second rolling sample window
+        window = self._speed_windows[transfer_id]
+        window.append((now, transferred_bytes))
+
+        # Purge samples older than 1.5s
+        cutoff = now - window_duration
+        while len(window) > 2 and window[0][0] < cutoff:
+            window.popleft()
+
+        # Compute instantaneous window speed
+        if len(window) >= 2 and (window[-1][0] - window[0][0]) >= 0.1:
+            dt = window[-1][0] - window[0][0]
+            db = window[-1][1] - window[0][1]
+            instant_speed = max(db / dt, 0.0)
+        else:
+            instant_speed = overall_avg_speed
+
+        speed = instant_speed if instant_speed > 0 else overall_avg_speed
         speed_mb = speed / (1024 * 1024)
         speed_mbps = (speed * 8) / (1024 * 1024)
         
         remaining_bytes = max(total_bytes - transferred_bytes, 0)
-        eta = remaining_bytes / speed if speed > 0 else 0
+        eta = remaining_bytes / speed if speed > 0 else (remaining_bytes / overall_avg_speed if overall_avg_speed > 0 else 0)
         percent = (transferred_bytes / total_bytes * 100) if total_bytes > 0 else 100.0
         
         return {
             "speed": speed,
             "speed_mb": round(speed_mb, 2),
             "speed_mbps": round(speed_mbps, 2),
+            "avg_speed": round(overall_avg_speed, 2),
+            "avg_speed_mb": round(overall_avg_speed / (1024 * 1024), 2),
             "eta": round(eta, 1),
             "percent": round(percent, 1),
             "elapsed": round(elapsed, 1)
         }
+
+    def reset_metrics_window(self, transfer_id: str):
+        """Clean up rolling sample buffer for a completed or terminated transfer."""
+        self._speed_windows.pop(transfer_id, None)
 
     def process_and_send_file(
         self,

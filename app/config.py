@@ -16,7 +16,8 @@ MCP_PORT = 8000
 # Transfer Settings
 BUFFER_SIZE = 512 * 1024  # 512 KB streaming chunk
 SOCKET_BUFFER_SIZE = 4 * 1024 * 1024  # 4 MB high-speed TCP window buffer for Tailscale / WAN links
-PARALLEL_STREAMS_THRESHOLD = 10 * 1024 * 1024  # 10 MB
+PARALLEL_STREAMS_THRESHOLD = 10 * 1024 * 1024  # 10 MB threshold for 4-socket multi-stream transfer
+PARALLEL_WORKERS = 4  # 4 parallel TCP sockets for large files
 DEFAULT_UPLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "LocalShare")
 
 # Discovery Settings
@@ -57,12 +58,14 @@ class AppState:
         self.clipboard_history = []
         self.pending_approvals = {}  # transfer_id -> dict
         self.peer_cache = {}        # ip -> peer metadata dict
+        self.active_parallel_sessions = {}  # transfer_id -> parallel session dict
 
     def clear_memory(self):
         """Purge in-memory transfer logs and invoke Garbage Collector."""
         self.transfers.clear()
         self.clipboard_history.clear()
         self.pending_approvals.clear()
+        self.active_parallel_sessions.clear()
         import gc
         gc.collect()
 

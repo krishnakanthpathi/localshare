@@ -7,7 +7,8 @@ import socket
 import os
 import time
 import uuid
-from app.config import TCP_PORT, SOCKET_BUFFER_SIZE, state
+import threading
+from app.config import TCP_PORT, SOCKET_BUFFER_SIZE, BUFFER_SIZE, PARALLEL_STREAMS_THRESHOLD, PARALLEL_WORKERS, state
 from app.utils import is_compressible_file, compute_file_hash
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
@@ -50,6 +51,205 @@ def send_text_snippet(
     finally:
         sock.close()
 
+def send_parallel_file(
+    target_ip: str,
+    file_path: str,
+    rel_path: str = None,
+    target_port: int = TCP_PORT,
+    num_workers: int = PARALLEL_WORKERS,
+    progress_callback = None
+) -> tuple[bool, str]:
+    """Send a large file concurrently across 4 parallel TCP sockets."""
+    if not os.path.exists(file_path):
+        return False, f"File not found: {file_path}"
+
+    filename = os.path.basename(file_path)
+    relative_name = rel_path or filename
+    filesize = os.path.getsize(file_path)
+    transfer_id = str(uuid.uuid4())
+    file_checksum = compute_file_hash(file_path)
+
+    # 1. Compute part boundaries
+    part_size = filesize // num_workers
+    parts = []
+    for i in range(num_workers):
+        offset = i * part_size
+        length = (filesize - offset) if (i == num_workers - 1) else part_size
+        parts.append({"part_index": i, "offset": offset, "length": length})
+
+    # 2. Control Connection
+    control_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        control_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        control_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
+        control_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
+    except Exception:
+        pass
+    control_sock.settimeout(30.0)
+
+    # Register active outbound transfer record in state
+    transfer_record = {
+        "id": transfer_id,
+        "filename": filename,
+        "rel_path": relative_name,
+        "filepath": file_path,
+        "total_bytes": filesize,
+        "received_bytes": 0,
+        "transferred_bytes": 0,
+        "progress_percent": 0.0,
+        "direction": "OUTBOUND",
+        "target_ip": target_ip,
+        "status": "IN_PROGRESS",
+        "encrypted": False,
+        "compressed": False,
+        "parallel_streams": num_workers,
+        "speed": 0.0,
+        "speed_mb": 0.0,
+        "speed_mbps": 0.0,
+        "eta": 0.0,
+        "start_time": time.time(),
+        "end_time": 0.0
+    }
+    state.transfers.insert(0, transfer_record)
+
+    try:
+        control_sock.connect((target_ip, target_port))
+        
+        # Send PARALLEL_FILE_HEADER
+        send_message(control_sock, {
+            "type": "PARALLEL_FILE_HEADER",
+            "transfer_id": transfer_id,
+            "filename": filename,
+            "rel_path": relative_name,
+            "filesize": filesize,
+            "num_parts": num_workers,
+            "parts": parts,
+            "checksum": file_checksum
+        })
+
+        resp = receive_message(control_sock)
+        if not resp or resp.get("type") != "PARALLEL_FILE_RESPONSE" or resp.get("status") != "ACCEPT":
+            transfer_record["status"] = "FAILED"
+            err = resp.get("reason", "Rejected by peer") if resp else "No response"
+            return False, f"Peer rejected parallel transfer: {err}"
+
+        # Coordinate multi-part streaming across 4 concurrent worker sockets
+        bytes_sent_lock = threading.Lock()
+        total_sent_bytes = [0]
+        start_time = time.time()
+        worker_errors = []
+
+        def _worker_stream(part_info):
+            p_idx = part_info["part_index"]
+            p_off = part_info["offset"]
+            p_len = part_info["length"]
+
+            wsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                wsock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                wsock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
+                wsock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
+            except Exception:
+                pass
+            wsock.settimeout(60.0)
+
+            try:
+                wsock.connect((target_ip, target_port))
+                send_message(wsock, {
+                    "type": "PART_STREAM_HEADER",
+                    "transfer_id": transfer_id,
+                    "part_index": p_idx,
+                    "offset": p_off,
+                    "length": p_len
+                })
+
+                p_ack = receive_message(wsock)
+                if not p_ack or p_ack.get("status") != "READY":
+                    worker_errors.append(f"Worker {p_idx} handshake failed")
+                    return
+
+                with open(file_path, "rb", buffering=1024*1024) as f:
+                    f.seek(p_off)
+                    remaining = p_len
+                    while remaining > 0:
+                        chunk_size = min(BUFFER_SIZE, remaining)
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        wsock.sendall(chunk)
+                        chunk_len = len(chunk)
+                        remaining -= chunk_len
+
+                        with bytes_sent_lock:
+                            total_sent_bytes[0] += chunk_len
+                            current_sent = total_sent_bytes[0]
+                            metrics = processor.calculate_metrics(
+                                transferred_bytes=current_sent,
+                                total_bytes=filesize,
+                                start_time=start_time,
+                                transfer_id=transfer_id
+                            )
+                            transfer_record["transferred_bytes"] = current_sent
+                            transfer_record["received_bytes"] = current_sent
+                            transfer_record["progress_percent"] = metrics.get("percent", 0.0)
+                            transfer_record["speed"] = metrics.get("speed", 0.0)
+                            transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+                            transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
+                            transfer_record["eta"] = metrics.get("eta", 0.0)
+
+                            if progress_callback:
+                                progress_callback(current_sent, filesize, metrics)
+
+            except Exception as e:
+                worker_errors.append(f"Worker {p_idx} error: {e}")
+            finally:
+                wsock.close()
+
+        # Launch 4 worker threads concurrently
+        threads = []
+        for p in parts:
+            t = threading.Thread(target=_worker_stream, args=(p,), daemon=True)
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        if worker_errors:
+            transfer_record["status"] = "FAILED"
+            transfer_record["error_message"] = "; ".join(worker_errors)
+            return False, f"Parallel transmission error: {'; '.join(worker_errors)}"
+
+        # Wait for server completion confirmation on control socket
+        control_sock.settimeout(60.0)
+        final_ack = receive_message(control_sock)
+        if final_ack and final_ack.get("status") == "SUCCESS":
+            transfer_record["status"] = "COMPLETED"
+            transfer_record["transferred_bytes"] = filesize
+            transfer_record["received_bytes"] = filesize
+            transfer_record["progress_percent"] = 100.0
+            transfer_record["speed"] = 0.0
+            transfer_record["speed_mb"] = 0.0
+            transfer_record["speed_mbps"] = 0.0
+            transfer_record["eta"] = 0.0
+            transfer_record["end_time"] = time.time()
+            record_transfer(transfer_record)
+            processor.reset_metrics_window(transfer_id)
+            return True, f"File transferred successfully across {num_workers} parallel sockets."
+        elif final_ack and final_ack.get("status") == "FAILED":
+            err = final_ack.get('reason', 'Unknown server error')
+            transfer_record["status"] = "FAILED"
+            transfer_record["error_message"] = f"Peer error: {err}"
+            return False, f"Peer error: {err}"
+
+        return True, "Parallel stream complete."
+    except Exception as e:
+        transfer_record["status"] = "FAILED"
+        transfer_record["error_message"] = f"Socket error: {e}"
+        return False, f"Socket error: {e}"
+    finally:
+        control_sock.close()
+
 def send_single_file(
     target_ip: str,
     file_path: str,
@@ -64,10 +264,22 @@ def send_single_file(
     filename = os.path.basename(file_path)
     relative_name = rel_path or filename
     filesize = os.path.getsize(file_path)
-    transfer_id = str(uuid.uuid4())
 
-    use_compression = state.compression_enabled and is_compressible_file(filename) and filesize > 1024
+    # For large unencrypted files (>= 10MB), automatically dispatch 4-worker parallel streams
     use_encryption = state.encryption_enabled and bool(state.encryption_key)
+    use_compression = state.compression_enabled and is_compressible_file(filename) and filesize > 1024
+
+    if filesize >= PARALLEL_STREAMS_THRESHOLD and not use_encryption and not use_compression:
+        return send_parallel_file(
+            target_ip=target_ip,
+            file_path=file_path,
+            rel_path=rel_path,
+            target_port=target_port,
+            num_workers=PARALLEL_WORKERS,
+            progress_callback=progress_callback
+        )
+
+    transfer_id = str(uuid.uuid4())
     file_checksum = compute_file_hash(file_path)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
