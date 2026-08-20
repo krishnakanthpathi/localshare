@@ -9,7 +9,7 @@ import os
 import sys
 import time
 import uuid
-from app.config import TCP_PORT, WEB_PORT, state
+from app.config import TCP_PORT, WEB_PORT, SOCKET_BUFFER_SIZE, state
 from app.utils import safe_join, is_suspicious_file, format_bytes
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
@@ -76,6 +76,12 @@ class TCPServer:
             try:
                 self.server_socket.settimeout(2.0)
                 client_sock, client_addr = self.server_socket.accept()
+                try:
+                    client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
+                    client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
+                except Exception:
+                    pass
             except socket.timeout:
                 continue
             except Exception:

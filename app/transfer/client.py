@@ -7,7 +7,7 @@ import socket
 import os
 import time
 import uuid
-from app.config import TCP_PORT, state
+from app.config import TCP_PORT, SOCKET_BUFFER_SIZE, state
 from app.utils import is_compressible_file, compute_file_hash
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
@@ -71,6 +71,12 @@ def send_single_file(
     file_checksum = compute_file_hash(file_path)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
+    except Exception:
+        pass
     sock.settimeout(30.0)
 
     # Register active outbound transfer record in state
