@@ -119,7 +119,7 @@ class UDPDiscoveryServer:
                         "port": msg.get("port", TCP_PORT),
                         "web_port": msg.get("web_port", WEB_PORT),
                         "last_seen": now,
-                        "latency": round((now - msg.get("timestamp", now)) * 1000, 1) if msg.get("timestamp") else 0,
+                        "latency": max(round((now - msg.get("timestamp", now)) * 1000, 1), 0.5) if msg.get("timestamp") else 0,
                         "type": "tailscale" if sender_ip.startswith("100.") else "lan",
                         "acknowledged": True
                     }
@@ -269,12 +269,13 @@ def discover_peers(timeout=2.0) -> list[dict]:
                 ts_info = ts_map.get(sender_ip, {})
                 resolved_name = custom or (ts_info.get("name") if is_ts and ts_info else None) or msg.get("name", sender_ip)
 
+                rtt = max(round((time.time() - start_time) * 1000, 1), 0.1)
                 peers[sender_ip] = {
                     "ip": sender_ip,
                     "name": resolved_name,
                     "port": msg.get("port", TCP_PORT),
                     "web_port": msg.get("web_port", WEB_PORT),
-                    "latency": round((time.time() - msg.get("timestamp", time.time())) * 1000, 1),
+                    "latency": rtt,
                     "type": "tailscale" if is_ts else "lan",
                     "os": ts_info.get("os", "unknown") if is_ts else "unknown",
                     "acknowledged": True
