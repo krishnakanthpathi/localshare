@@ -14,8 +14,8 @@ WEB_PORT = 4000
 MCP_PORT = 8000
 
 # Transfer Settings
-BUFFER_SIZE = 256 * 1024  # 256 KB socket streaming chunk
-SOCKET_BUFFER_SIZE = 2 * 1024 * 1024  # 2 MB TCP window buffer for high-latency mesh links
+BUFFER_SIZE = 512 * 1024  # 512 KB streaming chunk
+SOCKET_BUFFER_SIZE = 4 * 1024 * 1024  # 4 MB high-speed TCP window buffer for Tailscale / WAN links
 PARALLEL_STREAMS_THRESHOLD = 10 * 1024 * 1024  # 10 MB
 DEFAULT_UPLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "LocalShare")
 

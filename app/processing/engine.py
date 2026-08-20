@@ -61,6 +61,7 @@ class TransferProcessor:
 
         start_time = time.time()
         sent_raw_bytes = resume_offset
+        last_callback_time = 0.0
         compressor = zlib.compressobj(state.compression_level, zlib.DEFLATED, zlib.MAX_WBITS | 16) if use_compression else None
         
         # Handle 0-byte file edge case
@@ -74,7 +75,7 @@ class TransferProcessor:
             return True, "Empty file stream dispatched successfully."
 
         try:
-            with open(file_path, "rb") as f:
+            with open(file_path, "rb", buffering=1024*1024) as f:
                 if resume_offset > 0:
                     f.seek(resume_offset)
 
@@ -104,8 +105,10 @@ class TransferProcessor:
                             else:
                                 sock.sendall(transformed)
 
-                    # Update progress
-                    if progress_callback:
+                    # Update progress with 50ms throttling to avoid socket send stalls
+                    now = time.time()
+                    if progress_callback and (now - last_callback_time >= 0.05 or sent_raw_bytes >= filesize):
+                        last_callback_time = now
                         metrics = self.calculate_metrics(sent_raw_bytes, filesize, start_time, resume_offset)
                         progress_callback(sent_raw_bytes, filesize, metrics)
 
@@ -153,6 +156,7 @@ class TransferProcessor:
         mode = "ab" if resume_offset > 0 else "wb"
         start_time = time.time()
         received_raw_bytes = resume_offset
+        last_callback_time = 0.0
         hasher = hashlib.md5()
         decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16) if is_compressed else None
 
@@ -166,7 +170,7 @@ class TransferProcessor:
             return True, "Empty file received successfully.", 0
 
         try:
-            with open(target_path, mode) as f:
+            with open(target_path, mode, buffering=1024*1024) as f:
                 if is_encrypted or is_compressed:
                     # Framed chunk stream mode
                     while received_raw_bytes < filesize:
@@ -204,7 +208,9 @@ class TransferProcessor:
                             hasher.update(decompressed_data)
                             received_raw_bytes += len(decompressed_data)
 
-                        if progress_callback:
+                        now = time.time()
+                        if progress_callback and (now - last_callback_time >= 0.05 or received_raw_bytes >= filesize):
+                            last_callback_time = now
                             metrics = self.calculate_metrics(received_raw_bytes, filesize, start_time, resume_offset)
                             progress_callback(received_raw_bytes, filesize, metrics)
 
@@ -216,7 +222,7 @@ class TransferProcessor:
                             hasher.update(final_decomp)
                             received_raw_bytes += len(final_decomp)
                 else:
-                    # Raw socket stream mode
+                    # Raw socket stream mode with high-throughput chunking
                     while received_raw_bytes < filesize:
                         chunk_to_read = min(BUFFER_SIZE, filesize - received_raw_bytes)
                         chunk = sock.recv(chunk_to_read)
@@ -226,7 +232,9 @@ class TransferProcessor:
                         hasher.update(chunk)
                         received_raw_bytes += len(chunk)
 
-                        if progress_callback:
+                        now = time.time()
+                        if progress_callback and (now - last_callback_time >= 0.05 or received_raw_bytes >= filesize):
+                            last_callback_time = now
                             metrics = self.calculate_metrics(received_raw_bytes, filesize, start_time, resume_offset)
                             progress_callback(received_raw_bytes, filesize, metrics)
 
