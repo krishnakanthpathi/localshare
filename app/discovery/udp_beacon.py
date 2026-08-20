@@ -285,12 +285,14 @@ def discover_peers(timeout=2.0) -> list[dict]:
                     rtt = max(round((time.time() - echoed_ts) * 1000, 1), 0.1)
                 else:
                     rtt = max(round((time.time() - start_time) * 1000, 1), 0.1)
+                now_recv = time.time()
                 peers[sender_ip] = {
                     "ip": sender_ip,
                     "name": resolved_name,
                     "port": msg.get("port", TCP_PORT),
                     "web_port": msg.get("web_port", WEB_PORT),
                     "latency": rtt,
+                    "last_seen": now_recv,
                     "type": "tailscale" if is_ts else "lan",
                     "os": ts_info.get("os", "unknown") if is_ts else "unknown",
                     "acknowledged": True

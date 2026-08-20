@@ -305,14 +305,28 @@ def run_interactive_cli():
                 for p in discovered:
                     with udp_server.lock:
                         udp_server.peers[p["ip"]] = p
-                peers = udp_server.get_active_peers()
+                
+                # Merge active discovered peers with background server state
+                all_active = udp_server.get_active_peers()
+                peer_map = {p["ip"]: p for p in all_active}
+                for p in discovered:
+                    peer_map[p["ip"]] = p
+                peers = list(peer_map.values())
+
                 if not peers:
-                    print("   No active peers found. Make sure other LocalShare devices are online.")
+                    print("   ⚠️  No active peers found.")
+                    print("   💡 Make sure other LocalShare devices are online on LAN or Tailscale.\n")
                 else:
-                    print(f"   Found {len(peers)} active peer(s):")
+                    print(f"   🟢 Found {len(peers)} active peer(s):\n")
+                    print(f"   {'#':<3} {'Peer Name':<26} {'Address':<22} {'Network':<12} {'OS':<10} {'Latency'}")
+                    print(f"   {'-'*3} {'-'*26} {'-'*22} {'-'*12} {'-'*10} {'-'*10}")
                     for i, p in enumerate(peers, 1):
-                        ptype = f"[{p.get('type', 'lan').upper()}]"
-                        print(f"   {i}. {p['name']} ({p['ip']}:{p.get('port', TCP_PORT)}) {ptype} - {p.get('latency', 0)}ms")
+                        ptype = p.get('type', 'lan').upper()
+                        os_name = str(p.get('os', 'Unknown')).capitalize()
+                        addr = f"{p['ip']}:{p.get('port', TCP_PORT)}"
+                        lat = f"{p.get('latency', 0):.1f}ms"
+                        print(f"   {i:<3} {p['name'][:26]:<26} {addr:<22} [{ptype:<9}] {os_name:<10} {lat}")
+                    print()
 
             elif cmd in ("2", "send", "batch"):
                 interactive_send_flow(udp_server)
