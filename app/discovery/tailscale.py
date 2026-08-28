@@ -6,7 +6,7 @@ Queries Tailscale daemon status, discovers online Tailscale mesh nodes, and maps
 import json
 import shutil
 import subprocess
-from app.db.mongo import get_peer_alias
+from app.storage import get_peer_alias
 
 def find_tailscale_binary() -> str | None:
     """Locate tailscale CLI binary across macOS, Linux, and Windows."""

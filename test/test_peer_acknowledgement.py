@@ -17,7 +17,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.config import UDP_PORT, TCP_PORT, WEB_PORT, state
+from app.config import UDP_PORT, TCP_PORT, state
 from app.utils import get_network_interfaces
 from app.discovery.tailscale import get_tailscale_peers, get_tailscale_status
 from app.discovery.udp_beacon import discover_peers
@@ -147,7 +147,6 @@ def send_discover_and_collect_acks(target_targets: list[tuple[str, int]], timeou
                     "ip": sender_ip,
                     "name": msg.get("name", sender_ip),
                     "port": msg.get("port", TCP_PORT),
-                    "web_port": msg.get("web_port", WEB_PORT),
                     "latency": round((time.time() - msg.get("timestamp", time.time())) * 1000, 2),
                     "acknowledged": True
                 }

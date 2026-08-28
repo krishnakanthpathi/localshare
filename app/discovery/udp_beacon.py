@@ -8,9 +8,9 @@ import json
 import time
 import threading
 import sys
-from app.config import UDP_PORT, TCP_PORT, WEB_PORT, state
+from app.config import UDP_PORT, TCP_PORT, state
 from app.utils import get_network_interfaces
-from app.db.mongo import get_peer_alias
+from app.storage import get_peer_alias
 from app.discovery.tailscale import get_tailscale_peers
 
 class UDPDiscoveryServer:
@@ -54,70 +54,62 @@ class UDPDiscoveryServer:
         except Exception:
             pass
 
-        # Only include peers that actively sent a packet within TTL
         with self.lock:
             for ip, peer in list(self.peers.items()):
-                if now - peer.get("last_seen", 0) <= ttl:
-                    custom = get_peer_alias(ip)
-                    peer_copy = dict(peer)
-                    if custom:
-                        peer_copy["name"] = custom
-                        peer_copy["custom_alias"] = custom
-
-                    # Enrich with Tailscale metadata if applicable
-                    if ip in ts_map or ip.startswith("100."):
-                        peer_copy["type"] = "tailscale"
-                        ts_info = ts_map.get(ip, {})
-                        if ts_info:
-                            peer_copy["os"] = ts_info.get("os", peer_copy.get("os", "unknown"))
-                            if not custom and ts_info.get("name"):
-                                peer_copy["name"] = ts_info["name"]
-                    else:
-                        peer_copy.setdefault("type", "lan")
-
-                    active_map[ip] = peer_copy
+                if now - peer.get("last_seen", 0) < ttl and peer.get("acknowledged", False):
+                    alias = get_peer_alias(ip)
+                    is_ts = ip.startswith("100.") or ip in ts_map
+                    ts_info = ts_map.get(ip, {})
+                    
+                    resolved_name = alias or (ts_info.get("name") if is_ts and ts_info else None) or peer.get("name", ip)
+                    active_map[ip] = {
+                        "ip": ip,
+                        "name": resolved_name,
+                        "port": peer.get("port", TCP_PORT),
+                        "latency": peer.get("latency", 0.5),
+                        "last_seen": peer.get("last_seen", now),
+                        "type": "tailscale" if is_ts else "lan",
+                        "os": ts_info.get("os", "unknown") if is_ts else "unknown",
+                        "acknowledged": True
+                    }
 
         return list(active_map.values())
 
     def _listen_loop(self):
-        """Listen for UDP broadcast and unicast packets."""
+        """Listen for UDP discovery broadcasts and directed ping requests."""
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if sys.platform != "win32":
-            try:
-                udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            except Exception:
-                pass
-
+        try:
+            udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except AttributeError:
+            pass
+        udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        
         try:
             udp_socket.bind(("0.0.0.0", UDP_PORT))
-        except Exception as e:
-            print(f"⚠️ UDP Discovery socket bind warning: {e}")
+        except OSError:
             return
+
+        udp_socket.settimeout(1.0)
 
         while self.running:
             try:
-                udp_socket.settimeout(2.0)
-                try:
-                    data, addr = udp_socket.recvfrom(2048)
-                except socket.timeout:
-                    continue
-
-                msg = json.loads(data.decode("utf-8", errors="ignore"))
-                msg_type = msg.get("type")
+                data, addr = udp_socket.recvfrom(2048)
                 sender_ip = addr[0]
 
                 if sender_ip in self.net_info["all"] or sender_ip == "127.0.0.1":
                     continue
 
-                now = time.time()
-                if msg_type in ("DISCOVER", "ANNOUNCE", "RESPONSE"):
+                msg = json.loads(data.decode("utf-8", errors="ignore"))
+                msg_type = msg.get("type")
+
+                if msg_type in ("ANNOUNCE", "RESPONSE"):
                     custom_name = get_peer_alias(sender_ip)
-                    prev_peer = self.peers.get(sender_ip, {})
+                    now = time.time()
                     
-                    # For RESPONSE packets, msg["timestamp"] is the echo of our own local timestamp,
-                    # so (now - msg["timestamp"]) is the true RTT measured on this machine's clock.
-                    # For ANNOUNCE packets, msg["timestamp"] is from the remote clock, so we avoid clock skew.
+                    with self.lock:
+                        prev_peer = self.peers.get(sender_ip, {})
+
                     if msg_type == "RESPONSE" and msg.get("ack") and isinstance(msg.get("timestamp"), (int, float)):
                         latency = max(round((now - msg["timestamp"]) * 1000, 1), 0.1)
                     else:
@@ -127,7 +119,6 @@ class UDPDiscoveryServer:
                         "ip": sender_ip,
                         "name": custom_name or msg.get("name", sender_ip),
                         "port": msg.get("port", TCP_PORT),
-                        "web_port": msg.get("web_port", WEB_PORT),
                         "last_seen": now,
                         "latency": latency,
                         "type": "tailscale" if sender_ip.startswith("100.") else "lan",
@@ -143,7 +134,6 @@ class UDPDiscoveryServer:
                         "name": state.device_name,
                         "ip": self.primary_ip,
                         "port": TCP_PORT,
-                        "web_port": WEB_PORT,
                         "timestamp": msg.get("timestamp"),
                         "ack": True
                     }).encode("utf-8")
@@ -192,7 +182,6 @@ class UDPDiscoveryServer:
             "ip": self.primary_ip,
             "tailscale_ip": self.net_info.get("tailscale"),
             "port": TCP_PORT,
-            "web_port": WEB_PORT,
             "timestamp": time.time()
         }).encode("utf-8")
 
@@ -206,13 +195,12 @@ class UDPDiscoveryServer:
 
 def discover_peers(timeout=2.0) -> list[dict]:
     """
-    Active peer scan function for CLI calls and REST API.
+    Active peer scan function for CLI calls and MCP.
     Sends DISCOVER packet to LAN broadcasts and unicast to Tailscale IPs.
     Returns ONLY peers that explicitly respond with an acknowledgment.
     """
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    # Bind to ephemeral port (0) to prevent port collisions with any running daemon
     try:
         udp_socket.bind(("0.0.0.0", 0))
     except Exception:
@@ -251,7 +239,6 @@ def discover_peers(timeout=2.0) -> list[dict]:
         "ip": net_info["primary"],
         "tailscale_ip": net_info.get("tailscale"),
         "port": TCP_PORT,
-        "web_port": WEB_PORT,
         "timestamp": start_time
     }).encode("utf-8")
 
@@ -290,7 +277,6 @@ def discover_peers(timeout=2.0) -> list[dict]:
                     "ip": sender_ip,
                     "name": resolved_name,
                     "port": msg.get("port", TCP_PORT),
-                    "web_port": msg.get("web_port", WEB_PORT),
                     "latency": rtt,
                     "last_seen": now_recv,
                     "type": "tailscale" if is_ts else "lan",

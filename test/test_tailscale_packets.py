@@ -11,7 +11,7 @@ import os
 # Add parent directory to path so we can import app modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.config import UDP_PORT, TCP_PORT, WEB_PORT, state
+from app.config import UDP_PORT, TCP_PORT, state
 from app.utils import get_network_interfaces
 from app.discovery.tailscale import get_tailscale_peers, get_tailscale_status
 
@@ -64,7 +64,6 @@ def test_send_udp_discovery_to_tailscale_peers(timeout=3.0):
                 "ip": my_primary,
                 "tailscale_ip": my_ts_ip,
                 "port": TCP_PORT,
-                "web_port": WEB_PORT,
                 "timestamp": time.time()
             }).encode("utf-8")
             sock.sendto(packet, (target_ip, UDP_PORT))
@@ -108,7 +107,6 @@ def test_send_udp_discovery_to_tailscale_peers(timeout=3.0):
                 "ip": sender_ip,
                 "name": msg_name,
                 "port": msg.get("port", TCP_PORT),
-                "web_port": msg.get("web_port", WEB_PORT),
                 "latency": latency,
                 "type": "tailscale" if sender_ip.startswith("100.") else "lan",
                 "raw_response": msg

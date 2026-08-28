@@ -10,12 +10,12 @@ import sys
 import time
 import uuid
 import hashlib
-from app.config import TCP_PORT, WEB_PORT, SOCKET_BUFFER_SIZE, BUFFER_SIZE, state
+from app.config import TCP_PORT, SOCKET_BUFFER_SIZE, BUFFER_SIZE, state
 from app.utils import safe_join, is_suspicious_file, format_bytes
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
 from app.security.encryption import decrypt_text
-from app.db.mongo import record_transfer, save_clipboard_item
+from app.storage import record_transfer, save_clipboard_item, log_info, log_error
 
 _server_instance = None
 
@@ -110,7 +110,6 @@ class TCPServer:
                     "type": "PONG",
                     "name": state.device_name,
                     "port": self.port,
-                    "web_port": WEB_PORT,
                     "timestamp": msg.get("timestamp"),
                     "ack": True
                 })
@@ -159,7 +158,7 @@ class TCPServer:
         if len(state.clipboard_history) > 50:
             state.clipboard_history.pop()
 
-        # Save to MongoDB
+        # Save to localshare.log
         save_clipboard_item(text, sender=sender, sender_ip=sender_ip)
 
         # Set system clipboard
@@ -335,7 +334,7 @@ class TCPServer:
                 "status": "SUCCESS",
                 "received_bytes": total_rec
             })
-            # Persist to MongoDB
+            # Persist to localshare.log
             record_transfer(transfer_record)
         else:
             transfer_record["status"] = "FAILED"

@@ -15,7 +15,7 @@ from app.processing.engine import processor
 from app.security.encryption import encrypt_text
 from app.queue.models import TransferTask, BatchTransferTask, TransferStatus
 from app.queue.manager import queue_manager
-from app.db.mongo import record_transfer
+from app.storage import record_transfer
 
 def send_text_snippet(
     target_ip: str,

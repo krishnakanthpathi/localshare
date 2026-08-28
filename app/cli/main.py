@@ -1,18 +1,18 @@
 """
 Interactive Command Line Interface (CLI Engine) for LocalShare
-Rich terminal dashboard, multi-folder batch queuing, MongoDB settings manager, and Tailscale peer resolver.
+Rich terminal dashboard, multi-folder batch queuing, local JSON settings manager, single log file, and Tailscale peer resolver.
 """
 
 import sys
 import os
 import time
 import argparse
-from app.config import state, TCP_PORT, WEB_PORT, DEFAULT_UPLOAD_DIR
-from app.utils import get_network_interfaces, generate_qr_code_ascii
-from app.db.mongo import (
+from app.config import state, TCP_PORT, LOG_FILE, CONFIG_FILE, DEFAULT_UPLOAD_DIR
+from app.utils import get_network_interfaces
+from app.storage import (
     load_settings, save_settings, get_settings_dict,
     get_peer_alias, set_peer_alias, delete_peer_alias, get_all_peer_aliases,
-    is_connected as is_mongo_connected
+    get_transfer_history, get_recent_log_lines, log_info
 )
 from app.security.encryption import generate_key, encrypt_text, decrypt_text
 from app.discovery.udp_beacon import UDPDiscoveryServer, discover_peers
@@ -22,7 +22,6 @@ from app.queue.models import TransferStatus
 from app.transfer.server import start_tcp_server, stop_tcp_server
 from app.transfer.client import send_single_file, send_batch, send_text_snippet
 from app.sync.clipboard import get_system_clipboard, set_system_clipboard, broadcast_text
-from app.api.server import start_web_server
 
 def format_bytes(size_bytes: int) -> str:
     """Format bytes into readable string."""
@@ -38,7 +37,6 @@ def format_bytes(size_bytes: int) -> str:
 def print_banner():
     """Print ASCII banner and live node connection info."""
     net_info = get_network_interfaces()
-    mongo_ok = is_mongo_connected()
 
     print("\n" + "=" * 68)
     print("  🚀 LOCALSHARE 2.0 - High-Speed Encrypted Mesh File Transfer")
@@ -47,16 +45,15 @@ def print_banner():
     print(f" 🌐 Primary LAN IP : {net_info['primary']} (Port: {TCP_PORT})")
     if net_info.get("tailscale"):
         print(f" 🔒 Tailscale IP   : {net_info['tailscale']} [Active]")
-    print(f" 🍃 MongoDB Status : {'🟢 Connected' if mongo_ok else '🟡 Offline (In-Memory Cache)'}")
     print(f" 🔐 Encryption     : {'🟢 AES-256-GCM Active' if state.encryption_enabled and state.encryption_key else '⚪ Disabled'}")
     print(f" ⚡ Compression    : {'🟢 Gzip (Level ' + str(state.compression_level) + ')' if state.compression_enabled else '⚪ Disabled'}")
-    print(f" 📁 Upload Folder : {os.path.abspath(state.upload_dir)}")
+    print(f" 📁 Upload Folder  : {os.path.abspath(state.upload_dir)}")
+    print(f" 📝 Log File       : {LOG_FILE}")
     print("=" * 68)
 
 def show_settings_panel():
     """Interactive Settings & Preferences Manager."""
     while True:
-        mongo_ok = is_mongo_connected()
         print("\n" + "-" * 50)
         print("         ⚙️  SETTINGS & PREFERENCES PANEL")
         print("-" * 50)
@@ -66,7 +63,7 @@ def show_settings_panel():
         print(f" 4. Gzip Compression    : {'✅ Enabled (Level ' + str(state.compression_level) + ')' if state.compression_enabled else '❌ Disabled'}")
         print(f" 5. AES-256 Encryption   : {'✅ Enabled' if state.encryption_enabled else '❌ Disabled'}")
         print(f" 6. Encryption Key       : {state.encryption_key[:12] + '...' if state.encryption_key else '<Not Set>'}")
-        print(f" 7. MongoDB Connection   : {state.mongo_uri} ({'🟢 Online' if mongo_ok else '🔴 Offline'})")
+        print(f" 7. Config & Log Paths   : {CONFIG_FILE}")
         print(f" 8. Back to Main Menu")
         print("-" * 50)
 
@@ -135,13 +132,10 @@ def show_settings_panel():
                 print("✅ Encryption key cleared.")
 
         elif choice == "7":
-            new_uri = input(f"Enter MongoDB connection URI [{state.mongo_uri}]: ").strip()
-            if new_uri:
-                save_settings({"mongo_uri": new_uri})
-                if is_mongo_connected():
-                    print("🟢 Successfully connected to MongoDB!")
-                else:
-                    print("⚠️ Could not connect to MongoDB at that URI. Saved for retry.")
+            print(f"\n📂 Local Storage Details:")
+            print(f"   Config File : {CONFIG_FILE}")
+            print(f"   Log File    : {LOG_FILE}")
+            input("\nPress Enter to continue...")
 
         elif choice == "8" or choice.lower() in ("b", "q", "exit"):
             break
@@ -150,103 +144,108 @@ def manage_peer_aliases():
     """Interactive Peer Name & Alias Manager."""
     while True:
         aliases = get_all_peer_aliases()
-        print("\n" + "-" * 55)
-        print("        🏷️  PEER NAME & IP ALIAS MANAGER (MongoDB)")
-        print("-" * 55)
+        print("\n" + "-" * 52)
+        print("          🏷️  PEER NAME & ALIAS MANAGER")
+        print("-" * 52)
         if not aliases:
-            print("  No custom peer aliases configured yet.")
+            print("  (No custom peer aliases configured)")
         else:
-            for i, (ip, data) in enumerate(aliases.items(), 1):
-                notes_str = f" ({data['notes']})" if data.get('notes') else ""
-                print(f"  {i}. {data['name']} -> {ip}{notes_str}")
-        print("-" * 55)
-        print("  1. Add or Update Peer Name for an IP")
-        print("  2. Delete a Peer Alias")
-        print("  3. Back to Main Menu")
-        print("-" * 55)
+            for ip, data in aliases.items():
+                notes_str = f" - {data.get('notes')}" if data.get('notes') else ""
+                print(f"  • {ip:<18} -> '{data['name']}'{notes_str}")
+        print("-" * 52)
+        print(" 1. Add / Update Peer Alias")
+        print(" 2. Delete Peer Alias")
+        print(" 3. Back to Main Menu")
+        print("-" * 52)
 
-        opt = input("Select action (1-3): ").strip()
+        opt = input("Choose option (1-3): ").strip()
         if opt == "1":
-            target_ip = input("Enter peer IP address (LAN or Tailscale 100.x.x.x): ").strip()
-            if target_ip:
-                custom_name = input(f"Enter friendly name for {target_ip}: ").strip()
-                notes = input("Enter optional notes (e.g. Living room Mac): ").strip()
-                if custom_name:
-                    set_peer_alias(target_ip, custom_name, notes)
-                    print(f"✅ Saved alias: '{custom_name}' for IP {target_ip}")
+            ip = input("Enter Peer IP (LAN or Tailscale): ").strip()
+            if not ip:
+                continue
+            name = input(f"Enter custom friendly name for {ip}: ").strip()
+            if not name:
+                continue
+            notes = input("Enter optional notes (e.g., 'Work Laptop'): ").strip()
+            set_peer_alias(ip, name, notes)
+            print(f"✅ Alias saved: '{name}' -> {ip}")
+
         elif opt == "2":
-            target_ip = input("Enter IP to remove alias for: ").strip()
-            if target_ip:
-                if delete_peer_alias(target_ip):
-                    print(f"✅ Removed alias for {target_ip}")
-                else:
-                    print(f"⚠️ No alias found for {target_ip}")
-        elif opt in ("3", "b", "q"):
+            ip = input("Enter IP of alias to delete: ").strip()
+            if ip and delete_peer_alias(ip):
+                print(f"✅ Deleted alias for {ip}")
+            else:
+                print("⚠️ Alias not found.")
+
+        elif opt in ("3", "b", "q", "exit"):
             break
 
 def interactive_send_flow(udp_server: UDPDiscoveryServer):
-    """Interactive multi-folder & file batch transmission flow."""
-    peers = udp_server.get_active_peers()
-    if not peers:
-        discovered = discover_peers(timeout=1.0)
-        for p in discovered:
-            with udp_server.lock:
-                udp_server.peers[p["ip"]] = p
-        peers = udp_server.get_active_peers()
+    """Guided flow for sending multiple files and folders in batch."""
+    print("\n" + "=" * 50)
+    print("       📁 MULTI-FOLDER BATCH SENDER")
+    print("=" * 50)
 
-    print("\nSelect target peer:")
-    if not peers:
-        print("   No active peers discovered via beacon.")
-        target_ip = input("   Enter target IP manually: ").strip()
+    # 1. Collect target paths
+    paths = []
+    print("Enter file and directory paths (one per line).")
+    print("Press Enter on an empty line when finished:")
+    while True:
+        p = input(f"Path #{len(paths) + 1} > ").strip().strip('"').strip("'")
+        if not p:
+            if paths:
+                break
+            else:
+                print("⚠️ Please enter at least one file or folder path.")
+                continue
+        abs_p = os.path.abspath(os.path.expanduser(p))
+        if not os.path.exists(abs_p):
+            print(f"❌ Path does not exist: {abs_p}")
+            continue
+        paths.append(abs_p)
+        print(f"   Added: {os.path.basename(abs_p)} ({'Folder' if os.path.isdir(abs_p) else 'File'})")
+
+    # 2. Select Destination Peer
+    peers = udp_server.get_active_peers()
+    print("\nSelect Target Device:")
+    if peers:
+        for i, peer in enumerate(peers, 1):
+            alias = get_peer_alias(peer['ip'])
+            dname = f"{alias} ({peer['name']})" if alias else peer['name']
+            ptype = peer.get('type', 'lan').upper()
+            print(f"  {i}. {dname:<26} ({peer['ip']}) [{ptype}]")
+    print(f"  {len(peers) + 1}. Enter IP address manually")
+
+    choice = input(f"Choose target (1-{len(peers) + 1}): ").strip()
+    target_ip = None
+    target_name = None
+
+    if choice.isdigit() and 1 <= int(choice) <= len(peers):
+        selected = peers[int(choice) - 1]
+        target_ip = selected["ip"]
+        target_name = selected["name"]
     else:
-        for i, p in enumerate(peers, 1):
-            ptype = f"[{p.get('type', 'lan').upper()}]"
-            print(f"   {i}. {p['name']} ({p['ip']}) {ptype} - {p.get('latency', 0)}ms")
-        choice = input(f"Select peer (1-{len(peers)}) or type IP: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(peers):
-            target_ip = peers[int(choice) - 1]["ip"]
-        else:
-            target_ip = choice.strip()
+        target_ip = input("Enter target IP address: ").strip()
+        target_name = get_peer_alias(target_ip) or target_ip
 
     if not target_ip:
-        print("❌ Target IP is required.")
+        print("❌ Invalid target IP. Aborted.")
         return
 
-    print("\nEnter paths to send. You can specify MULTIPLE folders and files.")
-    print("Example: /path/to/folder1, /path/to/folder2, /path/to/file.pdf")
-    raw_paths = input("Path(s): ").strip()
-    if not raw_paths:
-        return
+    # 3. Enqueue and initiate batch transfer
+    print(f"\n📦 Enqueuing {len(paths)} path(s) to {target_name} ({target_ip})...")
+    batch = queue_manager.enqueue_paths(target_ip=target_ip, paths=paths, target_name=target_name)
+    print(f"🚀 Batch {batch.id[:8]} started: {len(batch.tasks)} files ({format_bytes(batch.total_bytes)} total)")
 
-    # Parse comma-separated or single paths
-    path_list = [p.strip().strip('"').strip("'") for p in raw_paths.split(",") if p.strip()]
-    valid_paths = [p for p in path_list if os.path.exists(p)]
-    if not valid_paths:
-        print("❌ None of the specified paths exist.")
-        return
-
-    print(f"\n📦 Enqueuing {len(valid_paths)} path(s) to {target_ip}...")
-    batch = queue_manager.enqueue_paths(target_ip=target_ip, paths=valid_paths)
-    print(f"   Batch ID: {batch.id}")
-    print(f"   Total Files: {len(batch.tasks)} | Total Size: {format_bytes(batch.total_bytes)}")
-    print(f"   Encryption : {'AES-256-GCM' if state.encryption_enabled else 'Plaintext'}")
-    print(f"   Compression: {'Gzip Active' if state.compression_enabled else 'None'}\n")
-
-    # Interactive progress monitor
-    print("🚀 Transmitting batch...")
-    last_file = ""
     while batch.status in (TransferStatus.QUEUED, TransferStatus.IN_PROGRESS):
         batch.update_aggregate_metrics()
         active_task = next((t for t in batch.tasks if t.status == TransferStatus.IN_PROGRESS), None)
-        if active_task and active_task.filename != last_file:
-            last_file = active_task.filename
-        
         pct = batch.progress_percent
         speed_mb = batch.speed / (1024 * 1024)
         speed_mbps = (batch.speed * 8) / (1024 * 1024)
         eta_str = f"{batch.eta:.1f}s" if batch.eta > 0 else "calculating"
         cur_file_str = f"[{active_task.filename[:14]} {active_task.progress_percent:.0f}%]" if active_task else "[Preparing]"
-
         sys.stdout.write(f"\r   Progress: {pct:5.1f}% | {cur_file_str:<22} | Speed: {speed_mb:6.2f} MB/s ({speed_mbps:5.1f} Mbps) | ETA: {eta_str:<10}")
         sys.stdout.flush()
         time.sleep(0.15)
@@ -260,9 +259,20 @@ def interactive_send_flow(udp_server: UDPDiscoveryServer):
             if t.status == TransferStatus.FAILED:
                 print(f"   - {t.relative_path}: {t.error_message}")
 
+def show_recent_logs():
+    """Display recent entries from ~/.localshare/localshare.log."""
+    print("\n" + "=" * 68)
+    print(f"       📝 UNIFIED LOG FILE: {LOG_FILE}")
+    print("=" * 68)
+    lines = get_recent_log_lines(limit=30)
+    for line in lines:
+        print(f"  {line}")
+    print("=" * 68)
+    input("\nPress Enter to return to main menu...")
+
 def run_interactive_cli():
     """Main interactive terminal dashboard."""
-    # 1. Load MongoDB settings
+    # 1. Load local JSON settings
     load_settings()
 
     # 2. Start TCP Server Engine
@@ -271,9 +281,6 @@ def run_interactive_cli():
     # 3. Start UDP Discovery Beacon
     udp_server = UDPDiscoveryServer()
     udp_server.start()
-
-    # 4. Start Web REST API in background
-    web_server, web_port = start_web_server(open_browser=False)
 
     print_banner()
     print("\n🟢 LocalShare Node active. Type 'help' or select an option below:")
@@ -287,10 +294,10 @@ def run_interactive_cli():
             print("  2. 📁 Send Files / Multiple Folders (Batch)")
             print("  3. 📋 Sync Clipboard / Send Text Snippet")
             print("  4. 📊 View Transfer Queue Status")
-            print("  5. 🏷️  Manage Peer Names & Aliases (MongoDB)")
+            print("  5. 🏷️  Manage Peer Names & Aliases")
             print("  6. ⚙️  Settings & Preferences Panel")
             print("  7. 🌐 Tailscale Network Explorer")
-            print("  8. 📱 Show Mobile QR Code")
+            print("  8. 📝 View Unified Event & Transfer Logs")
             print("  9. 🧹 Purge Memory / Clear History")
             print("  0. 🚪 Exit / Shutdown")
             print("=" * 48)
@@ -306,7 +313,6 @@ def run_interactive_cli():
                     with udp_server.lock:
                         udp_server.peers[p["ip"]] = p
                 
-                # Merge active discovered peers with background server state
                 all_active = udp_server.get_active_peers()
                 peer_map = {p["ip"]: p for p in all_active}
                 for p in discovered:
@@ -393,11 +399,8 @@ def run_interactive_cli():
                         alias_tag = f" (Alias: {p['custom_alias']})" if p.get("custom_alias") else ""
                         print(f"   - {p['name']} [{p['ip']}] (OS: {p['os']}){alias_tag}")
 
-            elif cmd in ("8", "qr"):
-                net_info = get_network_interfaces()
-                url = f"http://{net_info['primary']}:{web_port}"
-                print(f"\n📱 Connect Mobile / Browser to: {url}")
-                print(generate_qr_code_ascii(url))
+            elif cmd in ("8", "logs", "log"):
+                show_recent_logs()
 
             elif cmd in ("9", "clear", "purge"):
                 state.clear_memory()
@@ -428,7 +431,7 @@ def run_cli():
     subparsers = parser.add_subparsers(dest="subcommand")
 
     # server
-    subparsers.add_parser("server", help="Run LocalShare headless server node")
+    subparsers.add_parser("server", help="Run LocalShare headless mesh node")
 
     # scan
     subparsers.add_parser("scan", help="Scan LAN and Tailscale mesh for peers")
@@ -444,10 +447,13 @@ def run_cli():
     text_p.add_argument("--target", help="Target peer IP (optional)")
 
     # alias
-    alias_p = subparsers.add_parser("alias", help="Assign friendly name to IP in MongoDB")
+    alias_p = subparsers.add_parser("alias", help="Assign friendly name to IP")
     alias_p.add_argument("ip", help="Target IP address")
     alias_p.add_argument("name", help="Friendly name alias")
     alias_p.add_argument("--notes", default="", help="Optional notes")
+
+    # logs
+    subparsers.add_parser("logs", help="Display recent unified log entries")
 
     # tailscale
     subparsers.add_parser("tailscale", help="View Tailscale mesh status and online nodes")
@@ -495,7 +501,13 @@ def run_cli():
 
     elif args.subcommand == "alias":
         set_peer_alias(args.ip, args.name, args.notes)
-        print(f"✅ Alias saved in MongoDB: '{args.name}' for {args.ip}")
+        print(f"✅ Alias saved: '{args.name}' for {args.ip}")
+
+    elif args.subcommand == "logs":
+        lines = get_recent_log_lines(limit=50)
+        print(f"\n📝 Recent logs from {LOG_FILE}:")
+        for line in lines:
+            print(f"  {line}")
 
     elif args.subcommand == "tailscale":
         ts_peers = get_tailscale_peers()
@@ -512,7 +524,6 @@ def run_cli():
         start_tcp_server()
         udp_server = UDPDiscoveryServer()
         udp_server.start()
-        start_web_server(open_browser=False)
         print("🟢 Headless LocalShare server running. Press Ctrl+C to stop.")
         try:
             while True:
@@ -522,5 +533,4 @@ def run_cli():
             stop_tcp_server()
 
     else:
-        # Default: launch full interactive terminal dashboard
         run_interactive_cli()

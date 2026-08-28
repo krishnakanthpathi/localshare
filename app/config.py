@@ -1,16 +1,20 @@
 """
 LocalShare Core Configuration Module
-No .env files used - runtime configuration is dynamically managed via MongoDB and Settings Panel.
+Lightweight configuration with local JSON persistence and single log file.
 """
 
 import os
 import socket
 
+# Local Storage & Log Paths
+LOCALSHARE_DIR = os.path.join(os.path.expanduser("~"), ".localshare")
+CONFIG_FILE = os.path.join(LOCALSHARE_DIR, "config.json")
+LOG_FILE = os.path.join(LOCALSHARE_DIR, "localshare.log")
+
 # Default Host & Ports
 HOST = "0.0.0.0"
 UDP_PORT = 41234
 TCP_PORT = 4001
-WEB_PORT = 4000
 MCP_PORT = 8000
 
 # Transfer Settings
@@ -23,10 +27,6 @@ DEFAULT_UPLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "LocalSh
 # Discovery Settings
 DISCOVERY_INTERVAL = 3.0
 DISCOVERY_TIMEOUT = 2.0
-
-# Database Defaults
-DEFAULT_MONGO_URI = "mongodb://localhost:27017"
-DEFAULT_MONGO_DB = "localshare"
 
 # Security Rules
 SUSPICIOUS_EXTENSIONS = {
@@ -49,9 +49,6 @@ class AppState:
         self.encryption_key = ""  # Base64 32-byte AES key
         self.compression_enabled = True
         self.compression_level = 6
-        self.mongo_uri = DEFAULT_MONGO_URI
-        self.mongo_db = DEFAULT_MONGO_DB
-        self.mongo_connected = False
         
         # In-memory tracking
         self.transfers = []

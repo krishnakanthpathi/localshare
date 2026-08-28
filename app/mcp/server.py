@@ -5,7 +5,7 @@ Exposes file transfer queueing, Tailscale peer discovery, settings, and encrypti
 
 from mcp.server.fastmcp import FastMCP
 from app.config import state
-from app.db.mongo import load_settings, save_settings, get_settings_dict, set_peer_alias, get_all_peer_aliases
+from app.storage import load_settings, save_settings, get_settings_dict, set_peer_alias, get_all_peer_aliases
 from app.discovery.udp_beacon import discover_peers
 from app.discovery.tailscale import get_tailscale_peers, get_tailscale_status
 from app.queue.manager import queue_manager
@@ -13,7 +13,7 @@ from app.transfer.client import send_text_snippet
 from app.sync.clipboard import broadcast_text
 from app.security.encryption import generate_key
 
-# Load settings from MongoDB
+# Load settings from ~/.localshare/config.json
 load_settings()
 
 mcp = FastMCP("LocalShare")
@@ -58,7 +58,7 @@ def localshare_send_text(text: str, target_ip: str = "") -> dict:
 
 @mcp.tool()
 def localshare_set_peer_name(ip: str, custom_name: str, notes: str = "") -> dict:
-    """Assign or update a custom friendly name for any LAN or Tailscale IP in MongoDB."""
+    """Assign or update a custom friendly name for any LAN or Tailscale IP."""
     ok = set_peer_alias(ip, custom_name, notes)
     return {"status": "success" if ok else "error", "ip": ip, "name": custom_name}
 
@@ -75,7 +75,7 @@ def localshare_update_settings(
     encryption_key: str = None,
     compression_enabled: bool = None
 ) -> dict:
-    """Update settings in MongoDB and runtime engine."""
+    """Update settings in local config and runtime engine."""
     updates = {}
     if auto_approve is not None:
         updates["auto_approve"] = auto_approve
