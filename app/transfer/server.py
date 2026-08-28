@@ -424,6 +424,7 @@ class TCPServer:
 
         session = {
             "transfer_id": transfer_id,
+            "control_sock": sock,
             "fd": fd,
             "filename": filename,
             "filepath": target_path,
@@ -434,8 +435,10 @@ class TCPServer:
             "start_time": time.time(),
             "event_all_done": threading.Event(),
             "lock": threading.Lock(),
+            "control_lock": threading.Lock(),
             "transfer_record": transfer_record,
-            "last_print": 0.0
+            "last_print": 0.0,
+            "last_ack": 0.0
         }
         state.active_parallel_sessions[transfer_id] = session
 
@@ -462,6 +465,18 @@ class TCPServer:
         sys.stdout.flush()
 
         if all_completed and len(session["parts_done"]) == num_parts:
+            # Send final 100% progress ACK over control socket
+            try:
+                with session["control_lock"]:
+                    send_message(sock, {
+                        "type": "PROGRESS_ACK",
+                        "transfer_id": transfer_id,
+                        "received_bytes": filesize,
+                        "filesize": filesize
+                    })
+            except Exception:
+                pass
+
             transfer_record["status"] = "COMPLETED"
             transfer_record["received_bytes"] = filesize
             transfer_record["transferred_bytes"] = filesize
@@ -563,6 +578,23 @@ class TCPServer:
                             f"Speed: {speed_mb:6.2f} MB/s ({speed_mbps:5.1f} Mbps) | ETA: {eta_str:<8}"
                         )
                         sys.stdout.flush()
+
+                    # Send Out-Of-Band Progress ACK over control socket to keep sender in exact sync
+                    if now - session.get("last_ack", 0.0) >= 0.1 or total_rec >= session["filesize"]:
+                        session["last_ack"] = now
+                        ctrl_sock = session.get("control_sock")
+                        ctrl_lock = session.get("control_lock")
+                        if ctrl_sock and ctrl_lock:
+                            try:
+                                with ctrl_lock:
+                                    send_message(ctrl_sock, {
+                                        "type": "PROGRESS_ACK",
+                                        "transfer_id": transfer_id,
+                                        "received_bytes": total_rec,
+                                        "filesize": session["filesize"]
+                                    })
+                            except Exception:
+                                pass
 
             if remaining == 0:
                 with session["lock"]:

@@ -133,11 +133,53 @@ def send_parallel_file(
             err = resp.get("reason", "Rejected by peer") if resp else "No response"
             return False, f"Peer rejected parallel transfer: {err}"
 
-        # Coordinate multi-part streaming across 4 concurrent worker sockets
+        # Coordinate multi-part streaming across 4 concurrent worker sockets with async ACK synchronization
         bytes_sent_lock = threading.Lock()
         total_sent_bytes = [0]
         start_time = time.time()
         worker_errors = []
+        ack_lock = threading.Lock()
+        ack_thread_stop = threading.Event()
+        final_ack_msg = [None]
+        received_any_ack = [False]
+
+        def _control_ack_listener():
+            while not ack_thread_stop.is_set():
+                try:
+                    control_sock.settimeout(0.5)
+                    msg = receive_message(control_sock)
+                    if not msg:
+                        continue
+                    msg_type = msg.get("type")
+                    if msg_type == "PROGRESS_ACK":
+                        rec_bytes = msg.get("received_bytes", 0)
+                        with ack_lock:
+                            received_any_ack[0] = True
+                            transfer_record["received_bytes"] = rec_bytes
+                            metrics = processor.calculate_metrics(
+                                transferred_bytes=rec_bytes,
+                                total_bytes=filesize,
+                                start_time=start_time,
+                                transfer_id=transfer_id
+                            )
+                            transfer_record["progress_percent"] = metrics.get("percent", 0.0)
+                            transfer_record["speed"] = metrics.get("speed", 0.0)
+                            transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+                            transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
+                            transfer_record["eta"] = metrics.get("eta", 0.0)
+
+                            if progress_callback:
+                                progress_callback(rec_bytes, filesize, metrics)
+                    elif msg_type == "TRANSFER_COMPLETE" or msg.get("status") in ("SUCCESS", "FAILED"):
+                        final_ack_msg[0] = msg
+                        break
+                except (socket.timeout, TimeoutError):
+                    continue
+                except Exception:
+                    break
+
+        ack_thread = threading.Thread(target=_control_ack_listener, daemon=True)
+        ack_thread.start()
 
         def _worker_stream(part_info):
             p_idx = part_info["part_index"]
@@ -183,22 +225,26 @@ def send_parallel_file(
                         with bytes_sent_lock:
                             total_sent_bytes[0] += chunk_len
                             current_sent = total_sent_bytes[0]
-                            metrics = processor.calculate_metrics(
-                                transferred_bytes=current_sent,
-                                total_bytes=filesize,
-                                start_time=start_time,
-                                transfer_id=transfer_id
-                            )
                             transfer_record["transferred_bytes"] = current_sent
-                            transfer_record["received_bytes"] = current_sent
-                            transfer_record["progress_percent"] = metrics.get("percent", 0.0)
-                            transfer_record["speed"] = metrics.get("speed", 0.0)
-                            transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
-                            transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
-                            transfer_record["eta"] = metrics.get("eta", 0.0)
 
-                            if progress_callback:
-                                progress_callback(current_sent, filesize, metrics)
+                            with ack_lock:
+                                # If receiver ACKs haven't arrived yet (initial startup), report sent progress
+                                if not received_any_ack[0]:
+                                    transfer_record["received_bytes"] = current_sent
+                                    metrics = processor.calculate_metrics(
+                                        transferred_bytes=current_sent,
+                                        total_bytes=filesize,
+                                        start_time=start_time,
+                                        transfer_id=transfer_id
+                                    )
+                                    transfer_record["progress_percent"] = metrics.get("percent", 0.0)
+                                    transfer_record["speed"] = metrics.get("speed", 0.0)
+                                    transfer_record["speed_mb"] = metrics.get("speed_mb", 0.0)
+                                    transfer_record["speed_mbps"] = metrics.get("speed_mbps", 0.0)
+                                    transfer_record["eta"] = metrics.get("eta", 0.0)
+
+                                    if progress_callback:
+                                        progress_callback(current_sent, filesize, metrics)
 
             except Exception as e:
                 worker_errors.append(f"Worker {p_idx} error: {e}")
@@ -216,13 +262,23 @@ def send_parallel_file(
             t.join()
 
         if worker_errors:
+            ack_thread_stop.set()
             transfer_record["status"] = "FAILED"
             transfer_record["error_message"] = "; ".join(worker_errors)
             return False, f"Parallel transmission error: {'; '.join(worker_errors)}"
 
-        # Wait for server completion confirmation on control socket
-        control_sock.settimeout(60.0)
-        final_ack = receive_message(control_sock)
+        # Wait for terminal ACK from server on control socket
+        ack_thread.join(timeout=30.0)
+        ack_thread_stop.set()
+
+        final_ack = final_ack_msg[0]
+        if not final_ack:
+            try:
+                control_sock.settimeout(10.0)
+                final_ack = receive_message(control_sock)
+            except Exception:
+                pass
+
         if final_ack and final_ack.get("status") == "SUCCESS":
             transfer_record["status"] = "COMPLETED"
             transfer_record["transferred_bytes"] = filesize
