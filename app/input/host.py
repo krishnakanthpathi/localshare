@@ -37,6 +37,19 @@ def get_screen_bounds() -> tuple[int, int]:
         except Exception:
             pass
 
+    # Direct ground-truth probe for Linux / Wayland / Windows logical desktop bounds
+    try:
+        from pynput.mouse import Controller
+        mouse = Controller()
+        orig = mouse.position
+        mouse.position = (32767, 32767)
+        max_x, max_y = mouse.position
+        mouse.position = orig
+        if max_x > 0 and max_y > 0 and max_x < 32767 and max_y < 32767:
+            return int(max_x), int(max_y)
+    except Exception:
+        pass
+
     if sys.platform.startswith("linux"):
         try:
             from Xlib import display
