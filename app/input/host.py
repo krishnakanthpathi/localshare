@@ -104,10 +104,13 @@ class MouseHost:
         # State: "LOCAL" or "REMOTE"
         self.state = "LOCAL"
         self.running = False
+        self.is_warping = False
 
-        # Last cursor coordinates for delta calculation
-        self.last_x = self.screen_width // 2
-        self.last_y = self.screen_height // 2
+        # Center anchor coordinates when in REMOTE mode
+        self.anchor_x = self.screen_width // 2
+        self.anchor_y = self.screen_height // 2
+        self.last_x = self.anchor_x
+        self.last_y = self.anchor_y
 
         # UDP Socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -135,9 +138,9 @@ class MouseHost:
         if self.state == "LOCAL":
             # Edge push detection
             entered = False
-            if self.edge == "right" and x >= self.screen_width - self.edge_margin:
+            if self.edge == "right" and x >= self.screen_width - max(6, self.edge_margin):
                 entered = True
-            elif self.edge == "left" and x <= self.edge_margin:
+            elif self.edge == "left" and x <= max(6, self.edge_margin):
                 entered = True
 
             if entered:
@@ -145,17 +148,28 @@ class MouseHost:
                 norm_y = int((y / max(1, self.screen_height)) * 1000)
                 self._send(pack_packet(EV_SWITCH, 1, norm_y))
 
-                # Warp cursor to safe center anchor inside screen
-                center_x = self.screen_width // 2
-                center_y = int(y)
-                self.last_x = center_x
-                self.last_y = center_y
-                self.mouse.position = (center_x, center_y)
+                # Warp cursor to center anchor on host screen
+                self.anchor_x = self.screen_width // 2
+                self.anchor_y = self.screen_height // 2
+                self.last_x = self.anchor_x
+                self.last_y = self.anchor_y
+                self.is_warping = True
+                self.mouse.position = (self.anchor_x, self.anchor_y)
+                self.is_warping = False
 
                 sys.stdout.write(f"\r\033[K⚡ [MouseHost] -> Switched to REMOTE ({self.target_ip}). (Press ESC to return)\n")
                 sys.stdout.flush()
 
         elif self.state == "REMOTE":
+            if self.is_warping:
+                return
+
+            # Filter transition jumps and warp anomalies
+            if abs(x - self.last_x) > 120 or abs(y - self.last_y) > 120:
+                self.last_x = x
+                self.last_y = y
+                return
+
             dx = int((x - self.last_x) * self.speed)
             dy = int((y - self.last_y) * self.speed)
             self.last_x = x
@@ -164,19 +178,13 @@ class MouseHost:
             if dx != 0 or dy != 0:
                 self._send(pack_packet(EV_MOVE, dx, dy))
 
-            # Recenter cursor if it nears the screen boundary so user doesn't hit the physical edge
-            margin = 50
-            if (
-                x <= margin
-                or x >= self.screen_width - margin
-                or y <= margin
-                or y >= self.screen_height - margin
-            ):
-                center_x = self.screen_width // 2
-                center_y = self.screen_height // 2
-                self.last_x = center_x
-                self.last_y = center_y
-                self.mouse.position = (center_x, center_y)
+            # Recenter cursor if it drifts > 100px from center anchor
+            if (x - self.anchor_x) ** 2 + (y - self.anchor_y) ** 2 > 10000:
+                self.is_warping = True
+                self.last_x = self.anchor_x
+                self.last_y = self.anchor_y
+                self.mouse.position = (self.anchor_x, self.anchor_y)
+                self.is_warping = False
 
     def _on_click(self, x, y, button, pressed):
         if not self.running or self.state != "REMOTE":
