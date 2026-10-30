@@ -72,6 +72,7 @@ class MouseHost:
         self.state = "LOCAL"
         self.running = False
         self.is_warping = False
+        self.enter_time = 0.0
 
         # Anchor coordinates when in REMOTE mode
         self.anchor_x = self.screen_width - 150
@@ -110,6 +111,7 @@ class MouseHost:
 
             if entered:
                 self.state = "REMOTE"
+                self.enter_time = time.time()
                 norm_y = int((y / max(1, self.screen_height)) * 1000)
                 self._send(pack_packet(EV_SWITCH, 1, norm_y))
 
@@ -124,7 +126,7 @@ class MouseHost:
                 sys.stdout.flush()
 
         elif self.state == "REMOTE":
-            if self.is_warping:
+            if self.is_warping or (time.time() - self.enter_time < 0.1):
                 return
 
             dx = int(x - self.anchor_x)
@@ -176,7 +178,7 @@ class MouseHost:
         else:
             target_y = self.screen_height // 2
 
-        return_x = self.screen_width - 30 if self.edge == "right" else 30
+        return_x = self.screen_width - 80 if self.edge == "right" else 80
         self.is_warping = True
         self.mouse.position = (return_x, target_y)
         self.is_warping = False

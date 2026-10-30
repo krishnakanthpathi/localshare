@@ -6,6 +6,7 @@ and detects edge pushback to return control to the host machine.
 
 import os
 import sys
+import time
 import glob
 import socket
 import subprocess
@@ -112,6 +113,8 @@ class MouseClient:
         # Current virtual cursor coords
         self.cur_x = 10
         self.cur_y = self.screen_height // 2
+        self.enter_time = 0.0
+        self.push_acc = 0
 
         self.host_addr = None
 
@@ -149,9 +152,12 @@ class MouseClient:
                     if val1 == 1:
                         # Enter remote
                         self.active = True
+                        self.enter_time = time.time()
+                        self.push_acc = 0
                         norm_y = val2
                         target_y = int((norm_y / 1000.0) * self.screen_height)
-                        self.cur_x = 10 if self.edge == "left" else (self.screen_width - 10)
+                        # Land safely past edge and Ubuntu Dock
+                        self.cur_x = 80 if self.edge == "left" else (self.screen_width - 80)
                         self.cur_y = max(0, min(self.screen_height - 1, target_y))
                         self.mouse.position = (self.cur_x, self.cur_y)
                         sys.stdout.write(f"\r\033[K🎮 [MouseClient] Host took control at ({self.cur_x}, {self.cur_y})\n")
@@ -159,6 +165,7 @@ class MouseClient:
                     elif val1 == 0:
                         # Exit remote
                         self.active = False
+                        self.push_acc = 0
                         sys.stdout.write(f"\r\033[K⏸️  [MouseClient] Host released control.\n")
                         sys.stdout.flush()
 
@@ -172,15 +179,25 @@ class MouseClient:
                     next_x = self.cur_x + dx
                     next_y = self.cur_y + dy
 
-                    # Return to Host check
+                    # Return to Host check: 0.5s cooldown + 40px cumulative push resistance
                     returned = False
-                    if self.edge == "left" and next_x <= 0 and dx < 0:
-                        returned = True
-                    elif self.edge == "right" and next_x >= self.screen_width - 1 and dx > 0:
-                        returned = True
+                    if time.time() - getattr(self, "enter_time", 0) > 0.5:
+                        if self.edge == "left" and next_x <= 0 and dx < 0:
+                            self.push_acc += abs(dx)
+                            if self.push_acc >= 40:
+                                returned = True
+                        elif self.edge == "right" and next_x >= self.screen_width - 1 and dx > 0:
+                            self.push_acc += abs(dx)
+                            if self.push_acc >= 40:
+                                returned = True
+                        else:
+                            self.push_acc = 0
+                    else:
+                        self.push_acc = 0
 
                     if returned:
                         self.active = False
+                        self.push_acc = 0
                         norm_y = int((self.cur_y / max(1, self.screen_height)) * 1000)
                         self.sock.sendto(pack_packet(EV_SWITCH, 0, norm_y), addr)
                         sys.stdout.write(f"\r\033[K🏠 [MouseClient] Pushed off {self.edge.upper()} edge -> Returned to Host.\n")
