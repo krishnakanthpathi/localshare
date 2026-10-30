@@ -37,6 +37,7 @@ from app.queue.manager import queue_manager
 from app.ui.views.peers_view import PeersView
 from app.ui.views.transfer_view import TransferView
 from app.ui.views.clipboard_view import ClipboardView
+from app.ui.views.mouse_view import MouseView
 from app.ui.views.settings_view import SettingsView
 from app.ui.views.logs_view import LogsView
 
@@ -110,7 +111,7 @@ class LocalShareMacOSApp(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
         self.sidebar.grid_columnconfigure(0, weight=1)
-        self.sidebar.grid_rowconfigure(7, weight=1)  # Pushes footer card to bottom
+        self.sidebar.grid_rowconfigure(8, weight=1)  # Pushes footer card to bottom
 
         # App Branding Header
         brand_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -142,6 +143,7 @@ class LocalShareMacOSApp(ctk.CTk):
         nav_items = [
             ("peers", "📡  Mesh Peers"),
             ("transfer", "📁  Send & Queue"),
+            ("mouse", "🖱️  Virtual KVM"),
             ("clipboard", "📋  Quick Snippet"),
             ("settings", "⚙️  Settings"),
             ("logs", "📝  Activity Log"),
@@ -163,11 +165,11 @@ class LocalShareMacOSApp(ctk.CTk):
             btn.grid(row=idx, column=0, sticky="ew", padx=PAD_MD, pady=PAD_XS)
             self.nav_buttons[key] = btn
 
-        # Spacer row 7 absorbs height
+        # Spacer row 8 absorbs height
 
         # Bottom Node Info Card in Sidebar
         self.node_card = ctk.CTkFrame(self.sidebar, corner_radius=RADIUS_CARD, fg_color=COLOR_CARD_BG)
-        self.node_card.grid(row=8, column=0, sticky="ew", padx=PAD_MD, pady=PAD_LG)
+        self.node_card.grid(row=9, column=0, sticky="ew", padx=PAD_MD, pady=PAD_LG)
 
         net_info = get_network_interfaces()
         prim_ip = net_info.get("primary", "127.0.0.1")
@@ -245,10 +247,11 @@ class LocalShareMacOSApp(ctk.CTk):
         self.views_frame.grid_columnconfigure(0, weight=1)
         self.views_frame.grid_rowconfigure(0, weight=1)
 
-        # Instantiate all 5 child views
+        # Instantiate all child views
         self.views: dict[str, ctk.CTkFrame] = {
             "peers": PeersView(self.views_frame, self),
             "transfer": TransferView(self.views_frame, self),
+            "mouse": MouseView(self.views_frame, self),
             "clipboard": ClipboardView(self.views_frame, self),
             "settings": SettingsView(self.views_frame, self),
             "logs": LogsView(self.views_frame, self),
@@ -381,6 +384,8 @@ class LocalShareMacOSApp(ctk.CTk):
         self.views["peers"].render_peers(peers)
         self.views["transfer"].update_peers_menu(peers)
         self.views["clipboard"].update_peers_menu(peers)
+        if "mouse" in self.views:
+            self.views["mouse"].update_peers_list(peers)
 
     def _periodic_metrics_refresh(self) -> None:
         """Periodically update in-flight transfer progress."""
@@ -399,6 +404,12 @@ class LocalShareMacOSApp(ctk.CTk):
         """Safely shutdown background sockets and cleanly destroy window."""
         self.closing = True
         state.event_listener = None
+
+        if "mouse" in self.views:
+            try:
+                self.views["mouse"].stop_all()
+            except Exception:
+                pass
 
         if self.udp_server:
             try:

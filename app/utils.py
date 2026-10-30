@@ -94,16 +94,37 @@ def sanitize_relative_path(rel_path):
 
 def safe_join(base_dir, relative_path):
     """
-    Safely join base directory and relative path, ensuring target stays inside base_dir.
+    Safely join base directory and relative path, ensuring target stays strictly inside base_dir.
+    Prevents path traversal and prefix collision attacks.
     """
     sanitized_rel = sanitize_relative_path(relative_path)
-    target_path = os.path.abspath(os.path.join(base_dir, sanitized_rel))
     abs_base = os.path.abspath(base_dir)
+    target_path = os.path.abspath(os.path.join(abs_base, sanitized_rel))
     
-    if not target_path.startswith(abs_base):
+    try:
+        if os.path.commonpath([abs_base, target_path]) != abs_base:
+            raise ValueError(f"Security Alert: Path traversal attempt detected ({relative_path})")
+    except ValueError:
         raise ValueError(f"Security Alert: Path traversal attempt detected ({relative_path})")
         
     return target_path
+
+def get_unique_filepath(target_path: str) -> str:
+    """
+    Generate collision-free filepath if file already exists:
+    e.g. 'doc.pdf' -> 'doc (1).pdf', 'doc (2).pdf'.
+    """
+    if not os.path.exists(target_path):
+        return target_path
+
+    dir_name, base_name = os.path.split(target_path)
+    stem, ext = os.path.splitext(base_name)
+    counter = 1
+    while True:
+        candidate = os.path.join(dir_name, f"{stem} ({counter}){ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
 
 def is_suspicious_file(filename):
     """Check if file has an executable/suspicious extension."""
@@ -115,14 +136,18 @@ def is_compressible_file(filename):
     ext = os.path.splitext(filename)[1].lower()
     return ext in COMPRESSIBLE_EXTENSIONS
 
-def compute_file_hash(filepath, max_bytes=10 * 1024 * 1024):
-    """Compute quick MD5 hash of first max_bytes for integrity checking."""
+def compute_file_hash(filepath, max_bytes=None):
+    """
+    Compute streaming MD5 hash for end-to-end integrity checking.
+    Defaults to full-file hash for complete cryptographic verification.
+    """
     hasher = hashlib.md5()
     try:
-        with open(filepath, "rb") as f:
+        with open(filepath, "rb", buffering=1024 * 1024) as f:
             read_bytes = 0
-            while read_bytes < max_bytes:
-                chunk = f.read(65536)
+            while max_bytes is None or read_bytes < max_bytes:
+                chunk_size = 1024 * 1024 if max_bytes is None else min(1024 * 1024, max_bytes - read_bytes)
+                chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 hasher.update(chunk)

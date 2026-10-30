@@ -11,7 +11,7 @@ import time
 import uuid
 import hashlib
 from app.config import TCP_PORT, SOCKET_BUFFER_SIZE, BUFFER_SIZE, state
-from app.utils import safe_join, is_suspicious_file, format_bytes
+from app.utils import safe_join, is_suspicious_file, format_bytes, get_unique_filepath
 from app.transfer.protocol import send_message, receive_message
 from app.processing.engine import processor
 from app.security.encryption import decrypt_text
@@ -229,12 +229,16 @@ class TCPServer:
 
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
-        # Check for existing partial file for RESUME
+        # Check for existing partial file for RESUME or avoid overwriting existing files
+        part_path = target_path + ".part"
         resume_offset = 0
-        if os.path.exists(target_path) and not is_encrypted and not is_compressed:
-            existing_size = os.path.getsize(target_path)
-            if 0 < existing_size < filesize:
-                resume_offset = existing_size
+        if os.path.exists(part_path) and not is_encrypted and not is_compressed:
+            part_size = os.path.getsize(part_path)
+            if 0 < part_size < filesize:
+                resume_offset = part_size
+        elif os.path.exists(target_path):
+            target_path = get_unique_filepath(target_path)
+            part_path = target_path + ".part"
 
         # Send response header
         send_message(sock, {
@@ -301,7 +305,7 @@ class TCPServer:
 
         ok, msg, total_rec = processor.receive_and_save_file(
             sock=sock,
-            target_path=target_path,
+            target_path=part_path,
             filesize=filesize,
             is_compressed=is_compressed,
             is_encrypted=is_encrypted,
@@ -315,7 +319,15 @@ class TCPServer:
         sys.stdout.flush()
 
         if ok:
+            try:
+                os.replace(part_path, target_path)
+            except Exception as e:
+                ok = False
+                msg = f"Failed to commit file from staging: {e}"
+
+        if ok:
             transfer_record["status"] = "COMPLETED"
+            transfer_record["filepath"] = target_path
             transfer_record["received_bytes"] = total_rec
             transfer_record["transferred_bytes"] = total_rec
             transfer_record["progress_percent"] = 100.0
@@ -383,8 +395,12 @@ class TCPServer:
 
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
+        if os.path.exists(target_path):
+            target_path = get_unique_filepath(target_path)
+        part_path = target_path + ".part"
+
         try:
-            fd = os.open(target_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o664)
+            fd = os.open(part_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o664)
             if filesize > 0:
                 os.ftruncate(fd, filesize)
         except Exception as e:
@@ -464,6 +480,11 @@ class TCPServer:
         sys.stdout.flush()
 
         if all_completed and len(session["parts_done"]) == num_parts:
+            try:
+                os.replace(part_path, target_path)
+            except Exception as e:
+                print(f"⚠️ Failed to commit parallel file from staging: {e}")
+
             # Send final 100% progress ACK over control socket
             try:
                 with session["control_lock"]:

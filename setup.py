@@ -8,11 +8,15 @@ setup(
     install_requires=[
         "cryptography>=42.0.0",
         "mcp>=1.0.0",
-        "customtkinter>=6.0.0",
-        "darkdetect>=0.8.0",
-        "pillow>=10.0.0",
         "pynput>=1.7.6",
     ],
+    extras_require={
+        "ui": [
+            "customtkinter>=6.0.0",
+            "darkdetect>=0.8.0",
+            "pillow>=10.0.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "localshare=main:main",
