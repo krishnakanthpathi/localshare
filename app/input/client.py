@@ -124,7 +124,7 @@ class MouseClient:
         self.enter_time = 0.0
 
         # Current virtual cursor coords
-        self.cur_x = 35
+        self.cur_x = 70
         self.cur_y = self.screen_height // 2
 
         self.host_addr = None
@@ -166,7 +166,8 @@ class MouseClient:
                         self.enter_time = time.time()
                         norm_y = val2
                         target_y = int((norm_y / 1000.0) * self.screen_height)
-                        self.cur_x = 35 if self.edge == "left" else (self.screen_width - 35)
+                        # Enter safely past the left sidebar / dock
+                        self.cur_x = 70 if self.edge == "left" else (self.screen_width - 70)
                         self.cur_y = max(0, min(self.screen_height - 1, target_y))
                         self.mouse.position = (self.cur_x, self.cur_y)
                         sys.stdout.write(f"\r\033[K🎮 [MouseClient] Host took control at ({self.cur_x}, {self.cur_y})\n")

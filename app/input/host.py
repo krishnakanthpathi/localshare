@@ -87,7 +87,7 @@ class MouseHost:
         edge_margin: int = 4,
         width: Optional[int] = None,
         height: Optional[int] = None,
-        speed: float = 1.0
+        speed: float = 1.5
     ):
         self.target_ip = target_ip
         self.target_port = target_port
@@ -164,25 +164,16 @@ class MouseHost:
             if self.is_warping:
                 return
 
-            # Filter transition jumps and warp anomalies
-            if abs(x - self.last_x) > 120 or abs(y - self.last_y) > 120:
-                self.last_x = x
-                self.last_y = y
+            # Discard completion of our own synthetic center warp
+            if x == self.anchor_x and y == self.anchor_y:
                 return
 
-            dx = int((x - self.last_x) * self.speed)
-            dy = int((y - self.last_y) * self.speed)
-            self.last_x = x
-            self.last_y = y
+            dx = int((x - self.anchor_x) * self.speed)
+            dy = int((y - self.anchor_y) * self.speed)
 
             if dx != 0 or dy != 0:
                 self._send(pack_packet(EV_MOVE, dx, dy))
-
-            # Recenter cursor if it drifts > 100px from center anchor
-            if (x - self.anchor_x) ** 2 + (y - self.anchor_y) ** 2 > 10000:
                 self.is_warping = True
-                self.last_x = self.anchor_x
-                self.last_y = self.anchor_y
                 self.mouse.position = (self.anchor_x, self.anchor_y)
                 self.is_warping = False
 
@@ -324,7 +315,7 @@ def start_mouse_host(
     edge: str = "right",
     width: Optional[int] = None,
     height: Optional[int] = None,
-    speed: float = 1.0
+    speed: float = 1.5
 ):
     host = MouseHost(
         target_ip=target_ip,
