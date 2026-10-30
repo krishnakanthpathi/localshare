@@ -37,6 +37,15 @@ def get_screen_bounds() -> tuple[int, int]:
         except Exception:
             pass
 
+    if sys.platform.startswith("linux"):
+        try:
+            from Xlib import display
+            d = display.Display()
+            s = d.screen()
+            return int(s.width_in_pixels), int(s.height_in_pixels)
+        except Exception:
+            pass
+
     try:
         import tkinter as tk
         root = tk.Tk()
@@ -57,7 +66,9 @@ class MouseHost:
         target_port: int = DEFAULT_INPUT_PORT,
         local_port: int = DEFAULT_INPUT_PORT,
         edge: str = "right",
-        edge_margin: int = 4
+        edge_margin: int = 4,
+        width: Optional[int] = None,
+        height: Optional[int] = None
     ):
         self.target_ip = target_ip
         self.target_port = target_port
@@ -66,7 +77,9 @@ class MouseHost:
         self.edge_margin = edge_margin
 
         self.mouse = MouseController()
-        self.screen_width, self.screen_height = get_screen_bounds()
+        det_w, det_h = get_screen_bounds()
+        self.screen_width = width or det_w
+        self.screen_height = height or det_h
 
         # State: "LOCAL" or "REMOTE"
         self.state = "LOCAL"
@@ -200,6 +213,12 @@ class MouseHost:
             except Exception:
                 break
 
+    def _intercept_filter(self, event_type, event):
+        """Intercept OS event tap on macOS to suppress local clicks/scrolls while in REMOTE mode."""
+        if self.state == "REMOTE":
+            return None
+        return event
+
     def start(self):
         """Start monitoring and streaming mouse events."""
         self.running = True
@@ -220,11 +239,15 @@ class MouseHost:
         self.keyboard_listener = KeyboardListener(on_press=self._on_key_press)
         self.keyboard_listener.start()
 
-        self.mouse_listener = MouseListener(
-            on_move=self._on_move,
-            on_click=self._on_click,
-            on_scroll=self._on_scroll
-        )
+        listener_kwargs = {
+            "on_move": self._on_move,
+            "on_click": self._on_click,
+            "on_scroll": self._on_scroll,
+        }
+        if sys.platform == "darwin":
+            listener_kwargs["intercept"] = self._intercept_filter
+
+        self.mouse_listener = MouseListener(**listener_kwargs)
         self.mouse_listener.start()
 
         try:
@@ -259,6 +282,12 @@ class MouseHost:
         print("\n👋 Mouse Host stopped.")
 
 
-def start_mouse_host(target_ip: str, target_port: int = DEFAULT_INPUT_PORT, edge: str = "right"):
-    host = MouseHost(target_ip=target_ip, target_port=target_port, edge=edge)
+def start_mouse_host(
+    target_ip: str,
+    target_port: int = DEFAULT_INPUT_PORT,
+    edge: str = "right",
+    width: Optional[int] = None,
+    height: Optional[int] = None
+):
+    host = MouseHost(target_ip=target_ip, target_port=target_port, edge=edge, width=width, height=height)
     host.start()
