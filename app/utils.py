@@ -9,7 +9,10 @@ import hashlib
 import re
 import subprocess
 import shutil
-import qrcode
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 from app.config import SUSPICIOUS_EXTENSIONS, COMPRESSIBLE_EXTENSIONS
 
 def get_network_interfaces():

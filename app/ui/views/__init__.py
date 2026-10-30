@@ -1,0 +1,3 @@
+"""
+LocalShare UI Views Package
+"""

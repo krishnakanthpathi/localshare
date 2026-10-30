@@ -15,7 +15,8 @@ ENV/
 
 # Build and distribution
 build/
-dist/
+dist/*
+!dist/*.whl
 *.egg-info/
 
 # Frontend Node modules & logs

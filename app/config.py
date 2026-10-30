@@ -14,6 +14,7 @@ LOG_FILE = os.path.join(LOCALSHARE_DIR, "localshare.log")
 # Default Host & Ports
 HOST = "0.0.0.0"
 UDP_PORT = 41234
+INPUT_PORT = 41235
 TCP_PORT = 4001
 MCP_PORT = 8000
 

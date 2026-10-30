@@ -32,6 +32,15 @@ def log_event(level: str, message: str, metadata: dict = None):
         with _lock:
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(log_line)
+        if hasattr(state, "event_listener") and callable(state.event_listener):
+            try:
+                state.event_listener("log", log_line.strip())
+                if metadata and metadata.get("type") == "CLIPBOARD":
+                    state.event_listener("snippet_received", metadata)
+                elif metadata and metadata.get("type") == "TRANSFER":
+                    state.event_listener("transfer_recorded", metadata)
+            except Exception:
+                pass
     except Exception as e:
         print(f"⚠️ Log write error: {e}")
 

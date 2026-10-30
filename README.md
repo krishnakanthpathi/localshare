@@ -1,6 +1,6 @@
-# LocalShare 2.0 🚀
+# LocalShare 2.1 🚀
 
-High-Speed Encrypted Mesh File & Text Sharing Architecture with Multi-Folder Queueing, Streaming Gzip Compression, AES-256-GCM Encryption, Real-Time Tailscale Resolution, 4x Parallel Sockets with Asynchronous Out-of-Band ACK Synchronization, FastMCP AI Tooling, and Single-File Logging.
+High-Speed Encrypted Mesh File & Text Sharing Architecture with Virtual KVM Mouse Sharing, Multi-Folder Queueing, Streaming Gzip Compression, AES-256-GCM Encryption, Real-Time Tailscale Resolution, 4x Parallel Sockets with Asynchronous Out-of-Band ACK Synchronization, FastMCP AI Tooling, and Single-File Logging.
 
 ---
 
@@ -36,6 +36,11 @@ localshare/
 │   ├── sync/                  # Clipboard Sync
 │   │   ├── __init__.py
 │   │   └── clipboard.py       # OS clipboard helpers & text broadcast
+│   ├── input/                 # Virtual KVM Subsystem (LAN Mouse & Input Sharing)
+│   │   ├── __init__.py
+│   │   ├── protocol.py        # 6-byte binary UDP input packet framing
+│   │   ├── host.py            # Mac mouse tracking, boundary trapping & streaming
+│   │   └── client.py          # Linux/Windows UDP listener & cursor injection
 │   ├── mcp/                   # Model Context Protocol Service
 │   │   ├── __init__.py
 │   │   └── server.py          # FastMCP server & AI tools
@@ -61,6 +66,7 @@ localshare/
 7. **Real-Time Tailscale Resolution & IP Naming**: Queries Tailscale daemon status dynamically, resolves MagicDNS/IPs, and stores custom user-assigned aliases for any IP locally.
 8. **Single-File Logging & Zero-Database Setup**: All persistent configuration is saved to `~/.localshare/config.json` and all activity is written to a single unified log file `~/.localshare/localshare.log`. No external databases or services required.
 9. **Built-in FastMCP Service**: Dedicated Model Context Protocol server exposing LocalShare tools directly to AI coding agents.
+10. **Virtual KVM Mouse Sharing**: Ultra-low-latency 6-byte binary UDP input streaming. Seamlessly move a single physical mouse between Mac and Linux/Windows displays with automatic edge-push boundary transitions.
 
 ---
 
@@ -200,36 +206,60 @@ sequenceDiagram
 
 ## 🚀 Quickstart & Usage
 
-### 1. Installation
+### 1. One-Line Installation (Linux / macOS / Windows)
+Install the latest release with a single command:
 ```bash
-pip install -r requirements.txt
+curl -sSL https://raw.githubusercontent.com/krishnakanthpathi/localshare/master/install.sh | bash
+```
+*Or install the pre-built wheel directly:*
+```bash
+pip install https://raw.githubusercontent.com/krishnakanthpathi/localshare/master/dist/localshare-2.1.0-py3-none-any.whl
 ```
 
-### 2. Run Interactive Terminal Dashboard
+### 2. Virtual KVM (Share Single Mouse Across Computers)
+Use your Mac's mouse seamlessly across your Linux laptop or Windows machine over LAN:
+
+**On your Linux laptop (Receiver / Client):**
 ```bash
-python main.py
+localshare mouse client
 ```
 
-### 3. Direct CLI Commands
+**On your Mac (Host / Controller):**
+```bash
+localshare mouse host <LINUX_IP>
+```
+*(Leave out `<LINUX_IP>` to automatically scan and pick your discovered peer).*
+* **Enter Remote**: Push your cursor against the **right edge** of your Mac screen.
+* **Return to Local**: Push your cursor against the **left edge** of your Linux screen.
+* **Emergency Escape**: Press `ESC` on your host keyboard anytime to immediately break remote lock.
+
+### 3. Run Interactive Terminal Dashboard
+```bash
+localshare
+# or: python main.py
+```
+
+### 4. Direct CLI Commands
 ```bash
 # Scan for active peers on LAN & Tailscale
-python main.py scan
+localshare scan
 
 # Send multiple files and folders in batch
-python main.py send /path/to/file.mp4 /path/to/folder --target 192.168.1.50
+localshare send /path/to/file.mp4 /path/to/folder --target 192.168.1.50
 
 # Assign custom friendly name to IP
-python main.py alias 100.105.203.102 "Work-Laptop"
+localshare alias 100.105.203.102 "Work-Laptop"
 
 # Share clipboard or text snippet
-python main.py text "Hello LocalShare!" --target 192.168.1.50
+localshare text "Hello LocalShare!" --target 192.168.1.50
 
 # View unified transfer and event logs
-python main.py logs
+localshare logs
 
 # Run headless server
-python main.py server
+localshare server
 
 # Run FastMCP service for AI agents
-python main.py mcp
+localshare mcp
+```
 ```

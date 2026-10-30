@@ -7,7 +7,7 @@ import sys
 import os
 import time
 import argparse
-from app.config import state, TCP_PORT, LOG_FILE, CONFIG_FILE, DEFAULT_UPLOAD_DIR
+from app.config import state, TCP_PORT, INPUT_PORT, LOG_FILE, CONFIG_FILE, DEFAULT_UPLOAD_DIR
 from app.utils import get_network_interfaces
 from app.storage import (
     load_settings, save_settings, get_settings_dict,
@@ -299,6 +299,7 @@ def run_interactive_cli():
             print("  7. 🌐 Tailscale Network Explorer")
             print("  8. 📝 View Unified Event & Transfer Logs")
             print("  9. 🧹 Purge Memory / Clear History")
+            print("  m. 🖱️  Virtual KVM (Share Mouse Across Machines)")
             print("  0. 🚪 Exit / Shutdown")
             print("=" * 48)
 
@@ -407,6 +408,33 @@ def run_interactive_cli():
                 queue_manager.clear_completed()
                 print("🧹 Memory logs purged and garbage collector executed.")
 
+            elif cmd.lower() in ("m", "mouse", "kvm"):
+                print("\n🖱️  Virtual KVM Mode:")
+                print("  1. Host (Share THIS computer's mouse with remote machine)")
+                print("  2. Client (Control THIS computer with remote mouse)")
+                kvm_choice = input("Select role (1-2) [1]: ").strip() or "1"
+                if kvm_choice == "1":
+                    from app.input.host import start_mouse_host
+                    peers = udp_server.get_active_peers()
+                    print("\nSelect Target Client Machine:")
+                    if peers:
+                        for i, peer in enumerate(peers, 1):
+                            alias = get_peer_alias(peer['ip'])
+                            dname = f"{alias} ({peer['name']})" if alias else peer['name']
+                            print(f"  {i}. {dname:<26} ({peer['ip']})")
+                    print(f"  {len(peers) + 1}. Enter IP address manually")
+                    ch = input(f"Choose target (1-{len(peers) + 1}): ").strip()
+                    tip = ""
+                    if ch.isdigit() and 1 <= int(ch) <= len(peers):
+                        tip = peers[int(ch) - 1]["ip"]
+                    else:
+                        tip = input("Enter target client IP: ").strip()
+                    if tip:
+                        start_mouse_host(target_ip=tip, edge="right")
+                elif kvm_choice == "2":
+                    from app.input.client import start_mouse_client
+                    start_mouse_client(edge="left")
+
             elif cmd in ("0", "exit", "quit", "q"):
                 print("\nShutting down LocalShare...")
                 udp_server.stop()
@@ -460,6 +488,21 @@ def run_cli():
 
     # mcp
     subparsers.add_parser("mcp", help="Run LocalShare FastMCP service")
+
+    # mouse (Virtual KVM)
+    mouse_p = subparsers.add_parser("mouse", help="Virtual KVM mouse sharing over LAN")
+    mouse_sub = mouse_p.add_subparsers(dest="mouse_role", help="Host or Client")
+
+    host_p = mouse_sub.add_parser("host", help="Run mouse host (shares this machine's mouse)")
+    host_p.add_argument("target", nargs="?", default="", help="Target receiver IP (auto-discovers if omitted)")
+    host_p.add_argument("--port", type=int, default=INPUT_PORT, help=f"UDP input port (default: {INPUT_PORT})")
+    host_p.add_argument("--edge", choices=["right", "left"], default="right", help="Switching edge (default: right)")
+
+    client_p = mouse_sub.add_parser("client", help="Run mouse receiver")
+    client_p.add_argument("--port", type=int, default=INPUT_PORT, help=f"UDP bind port (default: {INPUT_PORT})")
+    client_p.add_argument("--edge", choices=["left", "right"], default="left", help="Return edge (default: left)")
+    client_p.add_argument("--width", type=int, default=None, help="Display width override")
+    client_p.add_argument("--height", type=int, default=None, help="Display height override")
 
     args = parser.parse_args()
 
@@ -518,6 +561,34 @@ def run_cli():
     elif args.subcommand == "mcp":
         from app.mcp.server import run_mcp_service
         run_mcp_service()
+
+    elif args.subcommand == "mouse":
+        from app.input.host import start_mouse_host
+        from app.input.client import start_mouse_client
+        if args.mouse_role == "client":
+            start_mouse_client(bind_port=args.port, edge=args.edge, width=args.width, height=args.height)
+        elif args.mouse_role == "host":
+            target_ip = args.target
+            if not target_ip:
+                print("🔍 Searching for LocalShare peers on LAN...")
+                peers = discover_peers(timeout=1.5)
+                if not peers:
+                    print(f"❌ No peers found automatically. Usage: python3 main.py mouse host <IP>")
+                    return
+                print(f"Discovered {len(peers)} device(s):")
+                for idx, p in enumerate(peers, 1):
+                    alias = get_peer_alias(p['ip'])
+                    dname = f"{alias} ({p['name']})" if alias else p['name']
+                    print(f"  {idx}. {dname:<26} ({p['ip']})")
+                sel = input(f"Select peer (1-{len(peers)}): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(peers):
+                    target_ip = peers[int(sel) - 1]['ip']
+                else:
+                    print("❌ Invalid selection.")
+                    return
+            start_mouse_host(target_ip=target_ip, target_port=args.port, edge=args.edge)
+        else:
+            mouse_p.print_help()
 
     elif args.subcommand == "server":
         load_settings()
