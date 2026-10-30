@@ -4,10 +4,26 @@ Listens for low-latency UDP packets, simulates cursor movement and clicks,
 and detects edge pushback to return control to the host machine.
 """
 
+import os
 import sys
+import glob
 import socket
 import subprocess
 from typing import Optional
+
+# Ensure Linux / Wayland / Xwayland display variables are populated even in headless / SSH sessions
+if sys.platform.startswith("linux"):
+    uid = os.getuid() if hasattr(os, "getuid") else 1000
+    if "XDG_RUNTIME_DIR" not in os.environ and os.path.exists(f"/run/user/{uid}"):
+        os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    if "XAUTHORITY" not in os.environ:
+        auths = sorted(glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*"), key=os.path.getmtime, reverse=True)
+        if not auths and os.path.exists(os.path.expanduser("~/.Xauthority")):
+            auths = [os.path.expanduser("~/.Xauthority")]
+        if auths:
+            os.environ["XAUTHORITY"] = auths[0]
+    if "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":0"
 
 from pynput.mouse import Controller as MouseController, Button
 
