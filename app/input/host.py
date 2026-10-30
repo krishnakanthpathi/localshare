@@ -37,33 +37,6 @@ def get_screen_bounds() -> tuple[int, int]:
         except Exception:
             pass
 
-    if sys.platform.startswith("linux"):
-        # 1. xrandr check
-        try:
-            import subprocess
-            import re
-            out = subprocess.check_output(["xrandr"], stderr=subprocess.DEVNULL, text=True)
-            m = re.search(r"current\s+(\d+)\s+x\s+(\d+)", out)
-            if m:
-                return int(m.group(1)), int(m.group(2))
-            for line in out.splitlines():
-                if " connected" in line and ("primary" in line or "+" in line):
-                    for part in line.split():
-                        if "x" in part and "+" in part:
-                            res = part.split("+")[0].split("x")
-                            return int(res[0]), int(res[1])
-        except Exception:
-            pass
-
-        # 2. Xlib check
-        try:
-            from Xlib import display
-            d = display.Display()
-            s = d.screen()
-            return int(s.width_in_pixels), int(s.height_in_pixels)
-        except Exception:
-            pass
-
     try:
         import tkinter as tk
         root = tk.Tk()
@@ -84,33 +57,25 @@ class MouseHost:
         target_port: int = DEFAULT_INPUT_PORT,
         local_port: int = DEFAULT_INPUT_PORT,
         edge: str = "right",
-        edge_margin: int = 4,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        speed: float = 1.5
+        edge_margin: int = 4
     ):
         self.target_ip = target_ip
         self.target_port = target_port
         self.local_port = local_port
         self.edge = edge.lower()
         self.edge_margin = edge_margin
-        self.speed = max(0.1, float(speed))
 
         self.mouse = MouseController()
-        det_w, det_h = get_screen_bounds()
-        self.screen_width = width or det_w
-        self.screen_height = height or det_h
+        self.screen_width, self.screen_height = get_screen_bounds()
 
         # State: "LOCAL" or "REMOTE"
         self.state = "LOCAL"
         self.running = False
         self.is_warping = False
 
-        # Center anchor coordinates when in REMOTE mode
-        self.anchor_x = self.screen_width // 2
+        # Anchor coordinates when in REMOTE mode
+        self.anchor_x = self.screen_width - 150
         self.anchor_y = self.screen_height // 2
-        self.last_x = self.anchor_x
-        self.last_y = self.anchor_y
 
         # UDP Socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -138,9 +103,9 @@ class MouseHost:
         if self.state == "LOCAL":
             # Edge push detection
             entered = False
-            if self.edge == "right" and x >= self.screen_width - max(6, self.edge_margin):
+            if self.edge == "right" and x >= self.screen_width - self.edge_margin:
                 entered = True
-            elif self.edge == "left" and x <= max(6, self.edge_margin):
+            elif self.edge == "left" and x <= self.edge_margin:
                 entered = True
 
             if entered:
@@ -148,11 +113,9 @@ class MouseHost:
                 norm_y = int((y / max(1, self.screen_height)) * 1000)
                 self._send(pack_packet(EV_SWITCH, 1, norm_y))
 
-                # Warp cursor to center anchor on host screen
-                self.anchor_x = self.screen_width // 2
-                self.anchor_y = self.screen_height // 2
-                self.last_x = self.anchor_x
-                self.last_y = self.anchor_y
+                # Warp cursor to safe anchor inside screen
+                self.anchor_x = self.screen_width - 150 if self.edge == "right" else 150
+                self.anchor_y = int(y)
                 self.is_warping = True
                 self.mouse.position = (self.anchor_x, self.anchor_y)
                 self.is_warping = False
@@ -164,15 +127,13 @@ class MouseHost:
             if self.is_warping:
                 return
 
-            # Discard completion of our own synthetic center warp
-            if x == self.anchor_x and y == self.anchor_y:
-                return
-
-            dx = int((x - self.anchor_x) * self.speed)
-            dy = int((y - self.anchor_y) * self.speed)
+            dx = int(x - self.anchor_x)
+            dy = int(y - self.anchor_y)
 
             if dx != 0 or dy != 0:
                 self._send(pack_packet(EV_MOVE, dx, dy))
+
+                # Pin cursor back to anchor
                 self.is_warping = True
                 self.mouse.position = (self.anchor_x, self.anchor_y)
                 self.is_warping = False
@@ -216,7 +177,9 @@ class MouseHost:
             target_y = self.screen_height // 2
 
         return_x = self.screen_width - 30 if self.edge == "right" else 30
+        self.is_warping = True
         self.mouse.position = (return_x, target_y)
+        self.is_warping = False
 
     def _listen_incoming(self):
         """Listen for release and heartbeat signals from remote client."""
@@ -236,15 +199,6 @@ class MouseHost:
                     sys.stdout.flush()
             except Exception:
                 break
-
-    def _intercept_filter(self, event_type, event):
-        """Intercept OS event tap on macOS to suppress local clicks/scrolls while in REMOTE mode."""
-        if self.state == "REMOTE":
-            # Suppress clicks and scrolls locally so user doesn't activate background Mac apps.
-            # Never suppress move events (5) or drag events, which breaks delta calculation and warps.
-            if event_type in (1, 2, 3, 4, 22, 25, 26):
-                return None
-        return event
 
     def start(self):
         """Start monitoring and streaming mouse events."""
@@ -266,15 +220,11 @@ class MouseHost:
         self.keyboard_listener = KeyboardListener(on_press=self._on_key_press)
         self.keyboard_listener.start()
 
-        listener_kwargs = {
-            "on_move": self._on_move,
-            "on_click": self._on_click,
-            "on_scroll": self._on_scroll,
-        }
-        if sys.platform == "darwin":
-            listener_kwargs["intercept"] = self._intercept_filter
-
-        self.mouse_listener = MouseListener(**listener_kwargs)
+        self.mouse_listener = MouseListener(
+            on_move=self._on_move,
+            on_click=self._on_click,
+            on_scroll=self._on_scroll
+        )
         self.mouse_listener.start()
 
         try:
@@ -309,20 +259,6 @@ class MouseHost:
         print("\n👋 Mouse Host stopped.")
 
 
-def start_mouse_host(
-    target_ip: str,
-    target_port: int = DEFAULT_INPUT_PORT,
-    edge: str = "right",
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-    speed: float = 1.5
-):
-    host = MouseHost(
-        target_ip=target_ip,
-        target_port=target_port,
-        edge=edge,
-        width=width,
-        height=height,
-        speed=speed
-    )
+def start_mouse_host(target_ip: str, target_port: int = DEFAULT_INPUT_PORT, edge: str = "right"):
+    host = MouseHost(target_ip=target_ip, target_port=target_port, edge=edge)
     host.start()

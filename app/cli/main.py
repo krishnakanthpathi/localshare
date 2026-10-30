@@ -591,14 +591,7 @@ def run_cli():
                 else:
                     print("❌ Invalid selection.")
                     return
-            start_mouse_host(
-                target_ip=target_ip,
-                target_port=args.port,
-                edge=args.edge,
-                width=args.width,
-                height=args.height,
-                speed=getattr(args, "speed", 1.0)
-            )
+            start_mouse_host(target_ip=target_ip, target_port=args.port, edge=args.edge)
         else:
             mouse_p.print_help()
 

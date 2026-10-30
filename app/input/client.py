@@ -7,7 +7,6 @@ and detects edge pushback to return control to the host machine.
 import os
 import sys
 import glob
-import time
 import socket
 import subprocess
 from typing import Optional
@@ -63,28 +62,16 @@ def get_screen_bounds() -> tuple[int, int]:
         except Exception:
             pass
 
-    # 3. Linux xrandr / Xlib check
+    # 3. Linux xrandr check
     if sys.platform.startswith("linux"):
         try:
-            import re
             out = subprocess.check_output(["xrandr"], stderr=subprocess.DEVNULL, text=True)
-            m = re.search(r"current\s+(\d+)\s+x\s+(\d+)", out)
-            if m:
-                return int(m.group(1)), int(m.group(2))
             for line in out.splitlines():
                 if " connected" in line and ("primary" in line or "+" in line):
                     for part in line.split():
                         if "x" in part and "+" in part:
                             res = part.split("+")[0].split("x")
                             return int(res[0]), int(res[1])
-        except Exception:
-            pass
-
-        try:
-            from Xlib import display
-            d = display.Display()
-            s = d.screen()
-            return int(s.width_in_pixels), int(s.height_in_pixels)
         except Exception:
             pass
 
@@ -121,10 +108,9 @@ class MouseClient:
         self.mouse = MouseController()
         self.active = False
         self.running = False
-        self.enter_time = 0.0
 
         # Current virtual cursor coords
-        self.cur_x = 70
+        self.cur_x = 10
         self.cur_y = self.screen_height // 2
 
         self.host_addr = None
@@ -163,11 +149,9 @@ class MouseClient:
                     if val1 == 1:
                         # Enter remote
                         self.active = True
-                        self.enter_time = time.time()
                         norm_y = val2
                         target_y = int((norm_y / 1000.0) * self.screen_height)
-                        # Enter safely past the left sidebar / dock
-                        self.cur_x = 70 if self.edge == "left" else (self.screen_width - 70)
+                        self.cur_x = 10 if self.edge == "left" else (self.screen_width - 10)
                         self.cur_y = max(0, min(self.screen_height - 1, target_y))
                         self.mouse.position = (self.cur_x, self.cur_y)
                         sys.stdout.write(f"\r\033[K🎮 [MouseClient] Host took control at ({self.cur_x}, {self.cur_y})\n")
@@ -188,13 +172,12 @@ class MouseClient:
                     next_x = self.cur_x + dx
                     next_y = self.cur_y + dy
 
-                    # Return to Host check (cooldown to avoid jitter upon entering)
+                    # Return to Host check
                     returned = False
-                    if time.time() - self.enter_time > 0.4:
-                        if self.edge == "left" and next_x <= 0 and dx < 0:
-                            returned = True
-                        elif self.edge == "right" and next_x >= self.screen_width - 1 and dx > 0:
-                            returned = True
+                    if self.edge == "left" and next_x <= 0 and dx < 0:
+                        returned = True
+                    elif self.edge == "right" and next_x >= self.screen_width - 1 and dx > 0:
+                        returned = True
 
                     if returned:
                         self.active = False
