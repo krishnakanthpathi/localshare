@@ -62,29 +62,28 @@ def get_screen_bounds() -> tuple[int, int]:
         except Exception:
             pass
 
-    # 3. Ground-truth mouse boundary probe (Linux Wayland/X11)
-    try:
-        from pynput.mouse import Controller
-        mouse = Controller()
-        orig = mouse.position
-        mouse.position = (32767, 32767)
-        max_x, max_y = mouse.position
-        mouse.position = orig
-        if max_x > 0 and max_y > 0 and max_x < 32767 and max_y < 32767:
-            return int(max_x), int(max_y)
-    except Exception:
-        pass
-
-    # 4. Linux xrandr check
+    # 3. Linux xrandr / Xlib check
     if sys.platform.startswith("linux"):
         try:
+            import re
             out = subprocess.check_output(["xrandr"], stderr=subprocess.DEVNULL, text=True)
+            m = re.search(r"current\s+(\d+)\s+x\s+(\d+)", out)
+            if m:
+                return int(m.group(1)), int(m.group(2))
             for line in out.splitlines():
                 if " connected" in line and ("primary" in line or "+" in line):
                     for part in line.split():
                         if "x" in part and "+" in part:
                             res = part.split("+")[0].split("x")
                             return int(res[0]), int(res[1])
+        except Exception:
+            pass
+
+        try:
+            from Xlib import display
+            d = display.Display()
+            s = d.screen()
+            return int(s.width_in_pixels), int(s.height_in_pixels)
         except Exception:
             pass
 

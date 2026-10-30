@@ -501,6 +501,7 @@ def run_cli():
     host_p.add_argument("--edge", choices=["right", "left"], default="right", help="Switching edge (default: right)")
     host_p.add_argument("--width", type=int, default=None, help="Display width override")
     host_p.add_argument("--height", type=int, default=None, help="Display height override")
+    host_p.add_argument("--speed", type=float, default=1.0, help="Mouse sensitivity / speed factor (default: 1.0)")
 
     client_p = mouse_sub.add_parser("client", help="Run mouse receiver")
     client_p.add_argument("--port", type=int, default=INPUT_PORT, help=f"UDP bind port (default: {INPUT_PORT})")
@@ -590,7 +591,14 @@ def run_cli():
                 else:
                     print("❌ Invalid selection.")
                     return
-            start_mouse_host(target_ip=target_ip, target_port=args.port, edge=args.edge, width=args.width, height=args.height)
+            start_mouse_host(
+                target_ip=target_ip,
+                target_port=args.port,
+                edge=args.edge,
+                width=args.width,
+                height=args.height,
+                speed=getattr(args, "speed", 1.0)
+            )
         else:
             mouse_p.print_help()
 
