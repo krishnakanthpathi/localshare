@@ -19,6 +19,10 @@ def main():
         elif first_arg in ("server", "scan", "send", "text", "alias", "logs", "tailscale", "mouse"):
             from app.cli.main import run_cli
             run_cli()
+        elif first_arg in ("host", "client"):
+            sys.argv.insert(1, "mouse")
+            from app.cli.main import run_cli
+            run_cli()
         elif first_arg == "ui":
             try:
                 from app.ui.app import launch_ui

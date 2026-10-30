@@ -495,6 +495,8 @@ def run_cli():
 
     host_p = mouse_sub.add_parser("host", help="Run mouse host (shares this machine's mouse)")
     host_p.add_argument("target", nargs="?", default="", help="Target receiver IP (auto-discovers if omitted)")
+    host_p.add_argument("--ip", dest="ip_flag", default="", help="Target receiver IP")
+    host_p.add_argument("--target", dest="target_flag", default="", help="Target receiver IP")
     host_p.add_argument("--port", type=int, default=INPUT_PORT, help=f"UDP input port (default: {INPUT_PORT})")
     host_p.add_argument("--edge", choices=["right", "left"], default="right", help="Switching edge (default: right)")
     host_p.add_argument("--width", type=int, default=None, help="Display width override")
@@ -570,7 +572,7 @@ def run_cli():
         if args.mouse_role == "client":
             start_mouse_client(bind_port=args.port, edge=args.edge, width=args.width, height=args.height)
         elif args.mouse_role == "host":
-            target_ip = args.target
+            target_ip = args.target or getattr(args, "ip_flag", "") or getattr(args, "target_flag", "")
             if not target_ip:
                 print("🔍 Searching for LocalShare peers on LAN...")
                 peers = discover_peers(timeout=1.5)
